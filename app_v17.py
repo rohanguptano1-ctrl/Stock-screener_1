@@ -15,12 +15,31 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    .stMetric { background: #0f1117; border: 1px solid #1e2130; border-radius: 8px; padding: 12px; }
-    .risk-badge { display:inline-block; padding:4px 10px; border-radius:20px; font-size:13px; font-weight:600; }
-    .risk-low { background:#0d3b1e; color:#2ecc71; }
-    .risk-med { background:#3b2a0d; color:#f39c12; }
+    [data-testid="stMetric"] {
+        background: #1a1d2e;
+        border: 1px solid #2e3250;
+        border-radius: 10px;
+        padding: 16px;
+    }
+    [data-testid="stMetricLabel"] {
+        color: #a0aabf !important;
+        font-size: 13px !important;
+        font-weight: 500 !important;
+    }
+    [data-testid="stMetricValue"] {
+        color: #ffffff !important;
+        font-size: 28px !important;
+        font-weight: 700 !important;
+    }
+    [data-testid="stMetricDelta"] {
+        font-size: 13px !important;
+        font-weight: 600 !important;
+    }
+    .risk-badge { display:inline-block; padding:4px 12px; border-radius:20px; font-size:13px; font-weight:700; }
+    .risk-low  { background:#0d3b1e; color:#2ecc71; }
+    .risk-med  { background:#3b2a0d; color:#f39c12; }
     .risk-high { background:#3b0d0d; color:#e74c3c; }
-    .canslim-bar { height:8px; border-radius:4px; background:#1e2130; margin-top:4px; }
+    .canslim-bar  { height:8px; border-radius:4px; background:#2e3250; margin-top:4px; margin-bottom:8px; }
     .canslim-fill { height:8px; border-radius:4px; background:linear-gradient(90deg,#1a9e5c,#27ae60); }
 </style>
 """, unsafe_allow_html=True)
