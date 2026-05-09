@@ -9,8 +9,9 @@ import plotly.graph_objects as go
 # =========================================================
 
 st.set_page_config(
-    page_title="AI Equity Research Platform V17",
-    layout="wide"
+    page_title="BharatTrack V18",
+    layout="wide",
+    page_icon="🚀"
 )
 
 st.markdown("""
@@ -28,359 +29,108 @@ st.markdown("""
     }
     [data-testid="stMetricValue"] {
         color: #ffffff !important;
-        font-size: 28px !important;
+        font-size: 26px !important;
         font-weight: 700 !important;
     }
-    [data-testid="stMetricDelta"] {
-        font-size: 13px !important;
-        font-weight: 600 !important;
-    }
+    [data-testid="stMetricDelta"] { font-size: 13px !important; font-weight: 600 !important; }
     .risk-badge { display:inline-block; padding:4px 12px; border-radius:20px; font-size:13px; font-weight:700; }
     .risk-low  { background:#0d3b1e; color:#2ecc71; }
     .risk-med  { background:#3b2a0d; color:#f39c12; }
     .risk-high { background:#3b0d0d; color:#e74c3c; }
     .canslim-bar  { height:8px; border-radius:4px; background:#2e3250; margin-top:4px; margin-bottom:8px; }
     .canslim-fill { height:8px; border-radius:4px; background:linear-gradient(90deg,#1a9e5c,#27ae60); }
+    .pass-badge { display:inline-block; padding:2px 8px; border-radius:4px;
+                  background:#0d3b1e; color:#2ecc71; font-size:12px; font-weight:700; }
+    .fail-badge { display:inline-block; padding:2px 8px; border-radius:4px;
+                  background:#3b0d0d; color:#e74c3c; font-size:12px; font-weight:700; }
+    .regime-bull { background:#0d3b1e; color:#2ecc71; padding:6px 14px;
+                   border-radius:8px; font-weight:700; display:inline-block; }
+    .regime-bear { background:#3b0d0d; color:#e74c3c; padding:6px 14px;
+                   border-radius:8px; font-weight:700; display:inline-block; }
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🚀 AI Equity Research Platform V17")
-st.caption("Score-driven probabilities · CANSLIM scoring · Smart research notes · Risk management layer · Just type RELIANCE, TCS — no .NS needed")
+st.title("🚀 BharatTrack V18")
+st.caption("CANSLIM · Minervini Trend Template · Momentum Factor · IBD RS Rank · Basket Screener · Market Regime Filter")
 
 # =========================================================
-# DATA FETCH
+# INDEX BASKETS
+# =========================================================
+
+BASKETS = {
+    "Nifty 50": [
+        "ADANIENT","ADANIPORTS","APOLLOHOSP","ASIANPAINT","AXISBANK",
+        "BAJAJ-AUTO","BAJFINANCE","BAJAJFINSV","BEL","BPCL",
+        "BHARTIARTL","BRITANNIA","CIPLA","COALINDIA","DIVISLAB",
+        "DRREDDY","EICHERMOT","GRASIM","HCLTECH","HDFCBANK",
+        "HDFCLIFE","HEROMOTOCO","HINDALCO","HINDUNILVR","ICICIBANK",
+        "INDUSINDBK","INFY","ITC","JIOFIN","JSWSTEEL",
+        "KOTAKBANK","LT","M&M","MARUTI","NESTLEIND",
+        "NTPC","ONGC","POWERGRID","RELIANCE","SBILIFE",
+        "SHRIRAMFIN","SBIN","SUNPHARMA","TATACONSUM","TATAMOTORS",
+        "TATASTEEL","TCS","TECHM","TITAN","ULTRACEMCO"
+    ],
+    "Bank Nifty": [
+        "AXISBANK","BANDHANBNK","FEDERALBNK","HDFCBANK","ICICIBANK",
+        "IDFCFIRSTB","INDUSINDBK","KOTAKBANK","PNB","SBIN",
+        "AUBANK","BANKBARODA"
+    ],
+    "Nifty IT": [
+        "INFY","TCS","HCLTECH","WIPRO","TECHM",
+        "LTIM","MPHASIS","COFORGE","PERSISTENT","OFSS"
+    ],
+    "Nifty Pharma": [
+        "SUNPHARMA","DRREDDY","CIPLA","DIVISLAB","AUROPHARMA",
+        "LUPIN","TORNTPHARM","ALKEM","IPCA","BIOCON"
+    ],
+    "Nifty Midcap (Sample)": [
+        "ABCAPITAL","ABFRL","APLAPOLLO","ASTRAL","BALKRISIND",
+        "CANFINHOME","CHAMBLFERT","CROMPTON","DEEPAKNTR","DIXON",
+        "GLENMARK","GODREJPROP","GRANULES","GSPL","HFCL",
+        "IDFC","INDIAMART","JINDALSTEL","JUBLFOOD","KANSAINER",
+        "MAXHEALTH","MGL","NATIONALUM","NAVINFLUOR","NLCINDIA",
+        "OBEROIRLTY","PAGEIND","PIIND","POLYCAB","RAIN"
+    ],
+    "Custom": []
+}
+
+# =========================================================
+# TICKER UTILS
 # =========================================================
 
 def normalize_ticker(ticker):
-    """
-    Let users type RELIANCE, TCS, INFY etc.
-    Auto-appends .NS for NSE if no exchange suffix present.
-    Handles: RELIANCE -> RELIANCE.NS
-             RELIANCE.NS -> RELIANCE.NS (unchanged)
-             RELIANCE.BO -> RELIANCE.BO (unchanged)
-    """
     ticker = ticker.strip().upper()
     if "." not in ticker:
         ticker = ticker + ".NS"
     return ticker
 
-
 @st.cache_data(ttl=3600)
 def fetch_data(ticker, period="5y"):
     ticker = normalize_ticker(ticker)
-    df = yf.download(ticker, period=period, auto_adjust=True, progress=False)
-    if df.empty:
+    try:
+        df = yf.download(ticker, period=period, auto_adjust=True, progress=False)
+        if df.empty:
+            return pd.DataFrame()
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df.columns = [c.strip().title() for c in df.columns]
+        if "Close" not in df.columns and "Adj Close" in df.columns:
+            df.rename(columns={"Adj Close": "Close"}, inplace=True)
+        needed = [c for c in ["Close", "Open", "High", "Low", "Volume"] if c in df.columns]
+        if not needed or "Close" not in needed:
+            return pd.DataFrame()
+        df = df[needed].copy()
+        df.dropna(subset=["Close"], inplace=True)
+        return df
+    except Exception:
         return pd.DataFrame()
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    df.columns = [c.strip().title() for c in df.columns]
-    if "Close" not in df.columns and "Adj Close" in df.columns:
-        df.rename(columns={"Adj Close": "Close"}, inplace=True)
-    needed = [c for c in ["Close", "Open", "High", "Low", "Volume"] if c in df.columns]
-    if not needed or "Close" not in needed:
-        return pd.DataFrame()
-    df = df[needed].copy()
-    df.dropna(subset=["Close"], inplace=True)
-    return df
-
 
 # =========================================================
-# CANSLIM SCORING ENGINE
-# =========================================================
-
-def compute_canslim_score(df):
-    close = df["Close"]
-    scores = {}
-
-    if len(close) >= 63:
-        c_return = (close.iloc[-1] / close.iloc[-63] - 1) * 100
-        scores["C_CurrentMomentum"] = min(max(c_return / 20 * 20, 0), 20)
-    else:
-        scores["C_CurrentMomentum"] = 0
-
-    sma200 = close.rolling(200).mean()
-    if len(sma200.dropna()) > 0:
-        gap_pct = (close.iloc[-1] / sma200.iloc[-1] - 1) * 100
-        scores["A_AnnualTrend"] = min(max(gap_pct / 10 * 15, 0), 15)
-    else:
-        scores["A_AnnualTrend"] = 0
-
-    if len(close) >= 252:
-        high_52w = close.rolling(252).max().iloc[-1]
-        proximity = (close.iloc[-1] / high_52w) * 100
-        scores["N_NewHighs"] = 15 if proximity >= 95 else (8 if proximity >= 85 else 0)
-    else:
-        scores["N_NewHighs"] = 0
-
-    if "Volume" in df.columns and len(df) >= 50:
-        vol = df["Volume"]
-        avg_vol_20 = vol.rolling(20).mean().iloc[-1]
-        avg_vol_50 = vol.rolling(50).mean().iloc[-1]
-        scores["S_SupplyDemand"] = 15 if avg_vol_20 > avg_vol_50 * 1.1 else (8 if avg_vol_20 > avg_vol_50 else 3)
-    else:
-        scores["S_SupplyDemand"] = 7
-
-    sma50 = close.rolling(50).mean()
-    if len(sma50.dropna()) > 0 and len(sma200.dropna()) > 0:
-        scores["L_Leader"] = 15 if sma50.iloc[-1] > sma200.iloc[-1] else 0
-    else:
-        scores["L_Leader"] = 0
-
-    if len(sma200.dropna()) >= 20:
-        sma200_slope = (sma200.iloc[-1] / sma200.iloc[-20] - 1) * 100
-        above_200 = close.iloc[-1] > sma200.iloc[-1]
-        scores["I_Institutional"] = 10 if (above_200 and sma200_slope > 0) else (5 if above_200 else 0)
-    else:
-        scores["I_Institutional"] = 0
-
-    scores["M_MarketDirection"] = 10
-    return scores, sum(scores.values())
-
-
-# =========================================================
-# PROBABILITY ENGINE
-# =========================================================
-
-def compute_probability_scenarios(score, canslim_total, rsi, momentum, relative_strength):
-    rsi_signal = max(0, min(100, (rsi - 30) / 40 * 100)) if rsi else 50
-    mom_signal = 70 if momentum > 5 else (50 if momentum > 0 else 30)
-    rs_signal = 70 if relative_strength > 3 else (50 if relative_strength > 0 else 30)
-    composite = (score * 0.30 + min(canslim_total, 100) * 0.30 +
-                 rsi_signal * 0.15 + mom_signal * 0.15 + rs_signal * 0.10)
-    bullish = round(max(10, min(75, composite * 0.70)), 1)
-    bearish = round(max(5, min(60, (100 - composite) * 0.55)), 1)
-    sideways = round(100 - bullish - bearish, 1)
-    if sideways < 5:
-        sideways = 5
-        bearish = round(100 - bullish - sideways, 1)
-    return {"Bullish Continuation": bullish, "Sideways Consolidation": sideways, "Bearish Breakdown": bearish}
-
-
-# =========================================================
-# RISK MANAGEMENT ENGINE
-# =========================================================
-
-def compute_risk_metrics(df, capital=100000, risk_per_trade_pct=1.5):
-    close = df["Close"]
-    if "High" in df.columns and "Low" in df.columns:
-        tr = pd.concat([
-            df["High"] - df["Low"],
-            (df["High"] - close.shift()).abs(),
-            (df["Low"] - close.shift()).abs()
-        ], axis=1).max(axis=1)
-        atr = tr.rolling(14).mean().iloc[-1]
-    else:
-        atr = close.pct_change().std() * close.iloc[-1] * np.sqrt(14)
-
-    current_price = float(close.iloc[-1])
-    stop_loss = current_price - (2 * atr)
-    stop_loss_pct = ((current_price - stop_loss) / current_price) * 100
-    risk_amount = capital * (risk_per_trade_pct / 100)
-    risk_per_share = current_price - stop_loss
-    shares = int(risk_amount / risk_per_share) if risk_per_share > 0 else 0
-    position_value = shares * current_price
-    vol_annual = close.pct_change().std() * np.sqrt(252) * 100
-    rolling_max = close.cummax()
-    drawdown = (close / rolling_max - 1) * 100
-
-    return {
-        "ATR": round(float(atr), 2),
-        "CurrentPrice": round(current_price, 2),
-        "StopLoss": round(float(stop_loss), 2),
-        "StopLossPct": round(float(stop_loss_pct), 2),
-        "Target1R": round(float(current_price + 2 * atr), 2),
-        "Target2R": round(float(current_price + 4 * atr), 2),
-        "Target3R": round(float(current_price + 6 * atr), 2),
-        "RiskAmount": round(risk_amount, 0),
-        "Shares": shares,
-        "PositionValue": round(position_value, 0),
-        "PositionPct": round((position_value / capital) * 100, 1),
-        "VolatilityAnnual": round(vol_annual, 1),
-        "RiskTier": "Low" if vol_annual < 20 else ("Medium" if vol_annual < 35 else "High"),
-        "MaxDrawdown": round(float(drawdown.min()), 2),
-        "CurrentDrawdown": round(float(drawdown.iloc[-1]), 2)
-    }
-
-
-# =========================================================
-# CORE METRICS ENGINE
-# =========================================================
-
-def compute_metrics(df, benchmark_df):
-    close = df["Close"].copy()
-    sma50 = close.rolling(50).mean()
-    sma200 = close.rolling(200).mean()
-    delta = close.diff()
-    rs = delta.clip(lower=0).rolling(14).mean() / (-delta.clip(upper=0)).rolling(14).mean()
-    rsi = 100 - (100 / (1 + rs))
-    momentum = ((close.iloc[-1] / close.iloc[-63]) - 1) * 100
-    bench_return = ((benchmark_df["Close"].iloc[-1] / benchmark_df["Close"].iloc[-63]) - 1) * 100
-    stock_return = ((close.iloc[-1] / close.iloc[-63]) - 1) * 100
-    relative_strength = stock_return - bench_return
-    volatility = close.pct_change().std() * np.sqrt(252) * 100
-
-    score = 0
-    if float(close.iloc[-1]) > float(sma200.iloc[-1]): score += 30
-    if float(sma50.iloc[-1]) > float(sma200.iloc[-1]): score += 25
-    if float(rsi.iloc[-1]) > 55: score += 20
-    if momentum > 0: score += 15
-    if relative_strength > 0: score += 10
-
-    rec = "🟢 Strong Buy" if score >= 80 else ("🟢 Buy" if score >= 60 else ("🟠 Watch" if score >= 40 else "🔴 Avoid"))
-    structure = (
-        "Bullish Structure" if float(close.iloc[-1]) > float(sma200.iloc[-1]) and float(sma50.iloc[-1]) > float(sma200.iloc[-1])
-        else "Early Accumulation" if float(close.iloc[-1]) > float(sma200.iloc[-1])
-        else "Bearish Structure"
-    )
-
-    return {
-        "Price": round(float(close.iloc[-1]), 2),
-        "RSI": round(float(rsi.iloc[-1]), 2),
-        "Momentum": round(float(momentum), 2),
-        "RelativeStrength": round(float(relative_strength), 2),
-        "Volatility": round(float(volatility), 2),
-        "SMA50": round(float(sma50.iloc[-1]), 2),
-        "SMA200": round(float(sma200.iloc[-1]), 2),
-        "Recommendation": rec,
-        "Structure": structure,
-        "Score": int(score)
-    }
-
-
-# =========================================================
-# RULE-BASED RESEARCH NOTE (zero cost, no API)
-# =========================================================
-
-def generate_research_note(ticker, metrics, canslim_scores, canslim_total, risk_metrics, scenarios):
-    score = metrics["Score"]
-    rsi = metrics["RSI"]
-    momentum = metrics["Momentum"]
-    rs = metrics["RelativeStrength"]
-    bull_prob = scenarios["Bullish Continuation"]
-    bear_prob = scenarios["Bearish Breakdown"]
-
-    # 1. Investment Thesis
-    if score >= 80:
-        thesis = (f"{ticker} presents a high-conviction setup scoring {score}/100. "
-                  f"The {metrics['Structure'].lower()} is confirmed across trend, momentum, and relative strength. "
-                  f"Risk/reward favours bulls at {bull_prob:.0f}% bullish probability.")
-    elif score >= 60:
-        thesis = (f"{ticker} shows a constructive setup scoring {score}/100 with some mixed signals. "
-                  f"The {metrics['Structure'].lower()} is intact but selective entry with strict risk management is warranted. "
-                  f"Bullish probability stands at {bull_prob:.0f}%.")
-    elif score >= 40:
-        thesis = (f"{ticker} is in a neutral zone at {score}/100 — a decision point. "
-                  f"Neither a clear buy nor a clear avoid. Wait for a cleaner signal before committing capital.")
-    else:
-        thesis = (f"{ticker} is in a weak technical setup scoring {score}/100. "
-                  f"The {metrics['Structure'].lower()} suggests selling pressure dominates with {bear_prob:.0f}% bearish probability. "
-                  f"Capital is better deployed elsewhere for now.")
-
-    # 2. Technical Setup
-    sma_line = (
-        "Price is above both SMA50 and SMA200 — classic golden cross, a primary institutional accumulation signal."
-        if metrics["Price"] > metrics["SMA50"] > metrics["SMA200"]
-        else "Price is above SMA200 but SMA50 is still below it — early recovery, not yet fully confirmed."
-        if metrics["Price"] > metrics["SMA200"]
-        else "Price is below SMA200 — primary trend is bearish, caution warranted."
-    )
-    rsi_line = (
-        f"RSI at {rsi:.0f} is overbought — momentum is strong but a pullback is possible before the next leg."
-        if rsi > 70 else
-        f"RSI at {rsi:.0f} is in healthy bullish territory, supporting continuation."
-        if rsi > 55 else
-        f"RSI at {rsi:.0f} is neutral — momentum has not yet recovered sufficiently."
-        if rsi > 40 else
-        f"RSI at {rsi:.0f} is oversold — potential bounce candidate but confirm before entering."
-    )
-    mom_line = (
-        f"3-month momentum is a strong +{momentum:.1f}% — sustained buying interest."
-        if momentum > 5 else
-        f"3-month momentum is mildly positive at {momentum:.1f}% — trending right but lacking conviction."
-        if momentum > 0 else
-        f"3-month momentum is negative at {momentum:.1f}% — near-term selling pressure persists."
-    )
-    rs_line = (
-        f"Outperforming Nifty by {rs:.1f}% over 3 months — hallmark of a market leader."
-        if rs > 5 else
-        f"Mild Nifty outperformance of {rs:.1f}% — holding its own but not yet leading."
-        if rs > 0 else
-        f"Underperforming Nifty by {abs(rs):.1f}% — relative weakness is a concern."
-    )
-
-    # 3. CANSLIM Assessment
-    strengths, weaknesses = [], []
-    if canslim_scores.get("C_CurrentMomentum", 0) >= 10: strengths.append("strong current quarterly momentum (C)")
-    else: weaknesses.append("weak current quarterly momentum (C)")
-    if canslim_scores.get("N_NewHighs", 0) >= 15: strengths.append("near 52-week highs — price discovery (N)")
-    elif canslim_scores.get("N_NewHighs", 0) == 0: weaknesses.append("far from 52-week highs (N)")
-    if canslim_scores.get("S_SupplyDemand", 0) >= 15: strengths.append("rising volume confirming price strength (S)")
-    else: weaknesses.append("volume not yet confirming price moves (S)")
-    if canslim_scores.get("L_Leader", 0) >= 15: strengths.append("golden cross structure — market leader (L)")
-    else: weaknesses.append("lagging moving average structure (L)")
-    if canslim_scores.get("I_Institutional", 0) >= 10: strengths.append("rising 200DMA — institutional support (I)")
-
-    canslim_text = (
-        f"CANSLIM score: {int(canslim_total)}/100. "
-        + (f"Strengths: {', '.join(strengths)}. " if strengths else "No strong CANSLIM signals present. ")
-        + (f"Gaps: {', '.join(weaknesses)}." if weaknesses else "No major CANSLIM weaknesses identified.")
-    )
-
-    # 4. Risk Assessment
-    vol_line = (
-        f"Annual volatility of {risk_metrics['VolatilityAnnual']:.0f}% — high risk tier, position sizing must be conservative."
-        if risk_metrics["RiskTier"] == "High" else
-        f"Annual volatility of {risk_metrics['VolatilityAnnual']:.0f}% — moderate, standard position sizing applies."
-        if risk_metrics["RiskTier"] == "Medium" else
-        f"Annual volatility of {risk_metrics['VolatilityAnnual']:.0f}% — low, suitable for larger allocation."
-    )
-    dd_line = (
-        f"Historical max drawdown of {risk_metrics['MaxDrawdown']:.0f}% — deep correction risk, stop discipline is non-negotiable."
-        if risk_metrics["MaxDrawdown"] < -40 else
-        f"Historical max drawdown of {risk_metrics['MaxDrawdown']:.0f}% — within acceptable range for swing/positional trades."
-    )
-    sizing_line = (
-        f"ATR stop at ₹{risk_metrics['StopLoss']} ({risk_metrics['StopLossPct']:.1f}% risk) with 2R target at ₹{risk_metrics['Target2R']} "
-        f"gives a 1:2 risk/reward. Suggested position: {risk_metrics['Shares']} shares "
-        f"(₹{risk_metrics['PositionValue']:,.0f}, {risk_metrics['PositionPct']:.1f}% of capital)."
-    )
-
-    # 5. Conviction
-    if score >= 80 and canslim_total >= 60:
-        conviction, reason = "HIGH", "Both technical score and CANSLIM confirm a strong multi-timeframe setup."
-    elif score >= 60 and canslim_total >= 40:
-        conviction, reason = "MEDIUM", "Setup is constructive but mixed CANSLIM signals warrant a smaller initial position."
-    else:
-        conviction, reason = "LOW", "Too many conditions are unfavourable to justify full-size commitment right now."
-
-    return f"""
-**1. INVESTMENT THESIS**
-{thesis}
-
-**2. TECHNICAL SETUP**
-{sma_line} {rsi_line} {mom_line} {rs_line}
-
-**3. CANSLIM ASSESSMENT**
-{canslim_text}
-
-**4. RISK ASSESSMENT**
-{vol_line} {dd_line} {sizing_line}
-
-**5. CONVICTION LEVEL: {conviction}**
-{reason}
-"""
-
-
-# =========================================================
-# BENCHMARK — robust fetch with fallbacks
+# BENCHMARK + MARKET REGIME
 # =========================================================
 
 @st.cache_data(ttl=3600)
 def fetch_benchmark():
-    """
-    Try multiple ticker variants — yfinance is inconsistent
-    with index tickers on Streamlit Cloud.
-    """
     for ticker in ["^NSEI", "^NSEI.NS", "NIFTYBEES.NS"]:
         try:
             df = yf.download(ticker, period="5y", auto_adjust=True, progress=False)
@@ -397,361 +147,842 @@ def fetch_benchmark():
             continue
     return pd.DataFrame()
 
+def get_market_regime(benchmark_df):
+    """
+    Returns 'Bull' if Nifty is above its 200DMA, 'Bear' otherwise.
+    In bear regime, all buy signals are downgraded by one tier.
+    """
+    if benchmark_df.empty or len(benchmark_df) < 200:
+        return "Bull"
+    close = benchmark_df["Close"]
+    sma200 = close.rolling(200).mean().iloc[-1]
+    return "Bull" if float(close.iloc[-1]) > float(sma200) else "Bear"
+
 benchmark_df = fetch_benchmark()
 
 if benchmark_df.empty or "Close" not in benchmark_df.columns:
-    st.error(
-        "❌ Could not fetch benchmark data. This is a temporary Yahoo Finance issue — "
-        "please wait 1 minute and reload the page."
-    )
+    st.error("❌ Could not fetch benchmark data. This is a temporary Yahoo Finance issue — please reload.")
     st.stop()
 
+market_regime = get_market_regime(benchmark_df)
+
 # =========================================================
-# SCREENER
+# CORE METRICS
 # =========================================================
 
-st.header("📊 Screener")
+def compute_metrics(df, benchmark_df):
+    close = df["Close"].copy()
+    sma50 = close.rolling(50).mean()
+    sma200 = close.rolling(200).mean()
+    delta = close.diff()
+    rs = delta.clip(lower=0).rolling(14).mean() / (-delta.clip(upper=0)).rolling(14).mean()
+    rsi = 100 - (100 / (1 + rs))
+    momentum_3m = ((close.iloc[-1] / close.iloc[-63]) - 1) * 100
+    bench_return_3m = ((benchmark_df["Close"].iloc[-1] / benchmark_df["Close"].iloc[-63]) - 1) * 100
+    relative_strength = momentum_3m - bench_return_3m
+    volatility = close.pct_change().std() * np.sqrt(252) * 100
 
-ticker_input = st.text_input(
-    "Enter Tickers (comma-separated)",
-    "RELIANCE,TCS,INFY,HDFCBANK,ICICIBANK"
-)
+    score = 0
+    if float(close.iloc[-1]) > float(sma200.iloc[-1]): score += 30
+    if float(sma50.iloc[-1]) > float(sma200.iloc[-1]): score += 25
+    if float(rsi.iloc[-1]) > 55: score += 20
+    if momentum_3m > 0: score += 15
+    if relative_strength > 0: score += 10
 
-if st.button("Run Screener"):
-    tickers = [x.strip() for x in ticker_input.split(",")]
-    screener_rows = []
-    progress = st.progress(0)
+    structure = (
+        "Bullish Structure" if float(close.iloc[-1]) > float(sma200.iloc[-1]) and float(sma50.iloc[-1]) > float(sma200.iloc[-1])
+        else "Early Accumulation" if float(close.iloc[-1]) > float(sma200.iloc[-1])
+        else "Bearish Structure"
+    )
 
-    for i, ticker in enumerate(tickers):
-        try:
-            df = fetch_data(ticker)
-            if df.empty or "Close" not in df.columns or len(df) < 250:
-                continue
-            metrics = compute_metrics(df, benchmark_df)
-            canslim_scores, canslim_total = compute_canslim_score(df)
-            risk = compute_risk_metrics(df)
-            screener_rows.append({
-                "Ticker": ticker,
-                "Score": metrics["Score"],
-                "CANSLIM": int(canslim_total),
-                "Recommendation": metrics["Recommendation"],
-                "Structure": metrics["Structure"],
-                "RSI": metrics["RSI"],
-                "Momentum%": metrics["Momentum"],
-                "RelStrength%": metrics["RelativeStrength"],
-                "Volatility%": metrics["Volatility"],
-                "RiskTier": risk["RiskTier"],
-                "StopLoss%": risk["StopLossPct"],
-                "MaxDD%": risk["MaxDrawdown"]
-            })
-        except Exception:
-            pass
-        progress.progress((i + 1) / len(tickers))
+    return {
+        "Price": round(float(close.iloc[-1]), 2),
+        "RSI": round(float(rsi.iloc[-1]), 2),
+        "Momentum3M": round(float(momentum_3m), 2),
+        "RelativeStrength": round(float(relative_strength), 2),
+        "Volatility": round(float(volatility), 2),
+        "SMA50": round(float(sma50.iloc[-1]), 2),
+        "SMA200": round(float(sma200.iloc[-1]), 2),
+        "Structure": structure,
+        "Score": int(score)
+    }
 
-    if screener_rows:
-        st.dataframe(
-            pd.DataFrame(screener_rows).sort_values(by="Score", ascending=False),
-            use_container_width=True
-        )
+# =========================================================
+# CANSLIM SCORE
+# =========================================================
+
+def compute_canslim_score(df):
+    close = df["Close"]
+    scores = {}
+
+    scores["C_CurrentMomentum"] = min(max(
+        (close.iloc[-1] / close.iloc[-63] - 1) * 100 / 20 * 20, 0), 20) if len(close) >= 63 else 0
+
+    sma200 = close.rolling(200).mean()
+    scores["A_AnnualTrend"] = min(max(
+        (close.iloc[-1] / sma200.iloc[-1] - 1) * 100 / 10 * 15, 0), 15) if len(sma200.dropna()) > 0 else 0
+
+    if len(close) >= 252:
+        proximity = (close.iloc[-1] / close.rolling(252).max().iloc[-1]) * 100
+        scores["N_NewHighs"] = 15 if proximity >= 95 else (8 if proximity >= 85 else 0)
     else:
-        st.error("No valid stock data fetched.")
+        scores["N_NewHighs"] = 0
+
+    if "Volume" in df.columns and len(df) >= 50:
+        v20 = df["Volume"].rolling(20).mean().iloc[-1]
+        v50 = df["Volume"].rolling(50).mean().iloc[-1]
+        scores["S_SupplyDemand"] = 15 if v20 > v50 * 1.1 else (8 if v20 > v50 else 3)
+    else:
+        scores["S_SupplyDemand"] = 7
+
+    sma50 = close.rolling(50).mean()
+    scores["L_Leader"] = 15 if (len(sma50.dropna()) > 0 and len(sma200.dropna()) > 0
+                                 and sma50.iloc[-1] > sma200.iloc[-1]) else 0
+
+    if len(sma200.dropna()) >= 20:
+        slope = (sma200.iloc[-1] / sma200.iloc[-20] - 1) * 100
+        above = close.iloc[-1] > sma200.iloc[-1]
+        scores["I_Institutional"] = 10 if (above and slope > 0) else (5 if above else 0)
+    else:
+        scores["I_Institutional"] = 0
+
+    scores["M_MarketDirection"] = 10
+    return scores, sum(scores.values())
 
 # =========================================================
-# PORTFOLIO BACKTEST
+# MINERVINI TREND TEMPLATE
 # =========================================================
 
-st.header("📈 Portfolio Backtest")
+def compute_minervini_score(df):
+    """
+    Mark Minervini's 8 Trend Template conditions.
+    All 8 must pass for a Stage 2 uptrend confirmation.
+    Score = conditions passed (0-8), shown as pct (0-100).
+    """
+    close = df["Close"]
+    conditions = {}
 
-portfolio_input = st.text_input(
-    "Portfolio Tickers",
-    "RELIANCE,TCS,INFY,HDFCBANK,ICICIBANK"
-)
+    if len(close) < 252:
+        return {}, 0, 0
 
-col_years, col_capital = st.columns(2)
-with col_years:
-    years = st.slider("Backtest Years", 1, 10, 5)
-with col_capital:
-    capital = st.number_input("Portfolio Capital (₹)", min_value=10000, max_value=10000000,
-                               value=100000, step=10000, format="%d")
+    sma50  = close.rolling(50).mean()
+    sma150 = close.rolling(150).mean()
+    sma200 = close.rolling(200).mean()
 
-risk_per_trade = st.slider("Risk Per Trade (% of capital)", 0.5, 5.0, 1.5, 0.25)
+    price  = float(close.iloc[-1])
+    s50    = float(sma50.iloc[-1])
+    s150   = float(sma150.iloc[-1])
+    s200   = float(sma200.iloc[-1])
 
-if st.button("Run Portfolio Backtest"):
-    tickers = [x.strip() for x in portfolio_input.split(",")]
-    benchmark_returns = benchmark_df["Close"].pct_change().fillna(0)
-    portfolio_returns, selected_tickers, portfolio_risk_data = [], [], []
+    high_52w = float(close.rolling(252).max().iloc[-1])
+    low_52w  = float(close.rolling(252).min().iloc[-1])
 
-    for ticker in tickers:
-        try:
+    # 200DMA slope (trending up for at least 1 month = 20 trading days)
+    sma200_1m_ago = float(sma200.iloc[-20]) if len(sma200.dropna()) >= 20 else s200
+
+    conditions["1. Price > 200 DMA"]           = price > s200
+    conditions["2. 200 DMA trending up (1M)"]  = s200 > sma200_1m_ago
+    conditions["3. 150 DMA > 200 DMA"]         = s150 > s200
+    conditions["4. Price > 150 DMA"]           = price > s150
+    conditions["5. Price > 50 DMA"]            = price > s50
+    conditions["6. 50 DMA > 150 & 200 DMA"]   = (s50 > s150) and (s50 > s200)
+    conditions["7. Price ≥ 30% above 52W low"] = price >= low_52w * 1.30
+    conditions["8. Price within 25% of 52W high"] = price >= high_52w * 0.75
+
+    passed = sum(conditions.values())
+    score_pct = round(passed / 8 * 100)
+    return conditions, passed, score_pct
+
+# =========================================================
+# MOMENTUM FACTOR (Extended)
+# =========================================================
+
+def compute_momentum_score(df):
+    """
+    Academic momentum: 12-1 month (skip last month to avoid reversal).
+    Also computes raw 3M, 6M, 12M for display.
+    Score 0-100 based on composite momentum rank signal.
+    """
+    close = df["Close"]
+    result = {}
+
+    result["Momentum3M"]  = round((close.iloc[-1] / close.iloc[-63]  - 1) * 100, 2) if len(close) >= 63  else None
+    result["Momentum6M"]  = round((close.iloc[-1] / close.iloc[-126] - 1) * 100, 2) if len(close) >= 126 else None
+    result["Momentum12M"] = round((close.iloc[-1] / close.iloc[-252] - 1) * 100, 2) if len(close) >= 252 else None
+
+    # 12-1 momentum (skip last 21 days — standard academic approach)
+    if len(close) >= 273:
+        mom_12_1 = (close.iloc[-21] / close.iloc[-252] - 1) * 100
+        result["Momentum12_1"] = round(mom_12_1, 2)
+    else:
+        result["Momentum12_1"] = result["Momentum12M"]
+
+    # Trend consistency: % of last 20 weeks that closed up
+    if len(close) >= 100:
+        weekly = close.resample("W").last()
+        recent = weekly.iloc[-20:]
+        up_weeks = (recent.diff() > 0).sum()
+        result["TrendConsistency"] = round(up_weeks / len(recent) * 100)
+    else:
+        result["TrendConsistency"] = 50
+
+    # Composite momentum score (0-100)
+    scores = []
+    if result["Momentum3M"]  is not None: scores.append(min(max(result["Momentum3M"]  / 30 * 40, 0), 40))
+    if result["Momentum6M"]  is not None: scores.append(min(max(result["Momentum6M"]  / 40 * 35, 0), 35))
+    if result["Momentum12M"] is not None: scores.append(min(max(result["Momentum12M"] / 60 * 25, 0), 25))
+    result["MomentumScore"] = round(sum(scores)) if scores else 0
+
+    return result
+
+# =========================================================
+# IBD-STYLE RS RANK (within screened universe)
+# =========================================================
+
+def compute_rs_ranks(universe_returns_12m):
+    """
+    Ranks all stocks in the universe by 12M return.
+    Returns a dict: ticker -> RS Rank (1-99, higher is better).
+    Mimics IBD RS Rating.
+    """
+    if not universe_returns_12m:
+        return {}
+    series = pd.Series(universe_returns_12m)
+    ranks = series.rank(pct=True) * 99
+    return ranks.round().astype(int).to_dict()
+
+# =========================================================
+# MASTER COMBINED SCORE
+# =========================================================
+
+def compute_master_score(base_score, canslim_total, minervini_pct,
+                          momentum_score, rs_rank, market_regime):
+    """
+    Blended score across all frameworks.
+    Market regime filter: Bear market downgrades all scores by 20%.
+    """
+    raw = (
+        base_score        * 0.20 +   # Technical base (SMA, RSI)
+        canslim_total     * 0.25 +   # CANSLIM
+        minervini_pct     * 0.25 +   # Minervini conditions
+        momentum_score    * 0.20 +   # Momentum factor
+        rs_rank           * 0.10     # RS Rank within universe
+    )
+    # Market regime penalty
+    if market_regime == "Bear":
+        raw = raw * 0.80
+
+    raw = round(min(raw, 100))
+
+    if raw >= 80:   rec = "🟢 Strong Buy"
+    elif raw >= 65: rec = "🟢 Buy"
+    elif raw >= 45: rec = "🟠 Watch"
+    else:           rec = "🔴 Avoid"
+
+    return raw, rec
+
+# =========================================================
+# RISK MANAGEMENT
+# =========================================================
+
+def compute_risk_metrics(df, capital=100000, risk_per_trade_pct=1.5):
+    close = df["Close"]
+    if "High" in df.columns and "Low" in df.columns:
+        tr = pd.concat([
+            df["High"] - df["Low"],
+            (df["High"] - close.shift()).abs(),
+            (df["Low"]  - close.shift()).abs()
+        ], axis=1).max(axis=1)
+        atr = tr.rolling(14).mean().iloc[-1]
+    else:
+        atr = close.pct_change().std() * close.iloc[-1] * np.sqrt(14)
+
+    price = float(close.iloc[-1])
+    stop  = price - 2 * float(atr)
+    stop_pct = (price - stop) / price * 100
+    risk_amt = capital * risk_per_trade_pct / 100
+    shares = int(risk_amt / (price - stop)) if (price - stop) > 0 else 0
+    pos_val = shares * price
+    vol = close.pct_change().std() * np.sqrt(252) * 100
+    dd  = (close / close.cummax() - 1) * 100
+
+    return {
+        "ATR": round(float(atr), 2),
+        "CurrentPrice": round(price, 2),
+        "StopLoss": round(stop, 2),
+        "StopLossPct": round(stop_pct, 2),
+        "Target1R": round(price + 2 * float(atr), 2),
+        "Target2R": round(price + 4 * float(atr), 2),
+        "Target3R": round(price + 6 * float(atr), 2),
+        "RiskAmount": round(risk_amt, 0),
+        "Shares": shares,
+        "PositionValue": round(pos_val, 0),
+        "PositionPct": round(pos_val / capital * 100, 1),
+        "VolatilityAnnual": round(float(vol), 1),
+        "RiskTier": "Low" if vol < 20 else ("Medium" if vol < 35 else "High"),
+        "MaxDrawdown": round(float(dd.min()), 2),
+        "CurrentDrawdown": round(float(dd.iloc[-1]), 2)
+    }
+
+# =========================================================
+# PROBABILITY ENGINE
+# =========================================================
+
+def compute_probability_scenarios(master_score, rsi, momentum, relative_strength):
+    rsi_sig = max(0, min(100, (rsi - 30) / 40 * 100)) if rsi else 50
+    mom_sig = 70 if momentum > 5 else (50 if momentum > 0 else 30)
+    rs_sig  = 70 if relative_strength > 3 else (50 if relative_strength > 0 else 30)
+    composite = master_score * 0.50 + rsi_sig * 0.20 + mom_sig * 0.20 + rs_sig * 0.10
+    bullish  = round(max(10, min(75, composite * 0.70)), 1)
+    bearish  = round(max(5,  min(60, (100 - composite) * 0.55)), 1)
+    sideways = round(100 - bullish - bearish, 1)
+    if sideways < 5:
+        sideways = 5
+        bearish = round(100 - bullish - sideways, 1)
+    return {"Bullish Continuation": bullish, "Sideways Consolidation": sideways, "Bearish Breakdown": bearish}
+
+# =========================================================
+# RESEARCH NOTE (rule-based)
+# =========================================================
+
+def generate_research_note(ticker, metrics, canslim_scores, canslim_total,
+                            minervini_passed, momentum_data, master_score,
+                            master_rec, risk_metrics, scenarios, market_regime):
+    bull_prob = scenarios["Bullish Continuation"]
+    bear_prob = scenarios["Bearish Breakdown"]
+
+    # Thesis
+    if master_score >= 80:
+        thesis = (f"{ticker} presents a high-conviction multi-framework setup. "
+                  f"Master Score {master_score}/100 with {minervini_passed}/8 Minervini conditions passed. "
+                  f"Bullish probability: {bull_prob:.0f}%.")
+    elif master_score >= 65:
+        thesis = (f"{ticker} shows a constructive setup (Master Score {master_score}/100) "
+                  f"with {minervini_passed}/8 Minervini conditions confirmed. "
+                  f"Selective entry with strict stops warranted.")
+    elif master_score >= 45:
+        thesis = (f"{ticker} is in a neutral zone (Master Score {master_score}/100). "
+                  f"Only {minervini_passed}/8 Minervini conditions pass. Wait for more confluence.")
+    else:
+        thesis = (f"{ticker} is in a weak setup (Master Score {master_score}/100). "
+                  f"Only {minervini_passed}/8 Minervini conditions pass and bear probability is {bear_prob:.0f}%. "
+                  f"Capital better deployed elsewhere.")
+
+    if market_regime == "Bear":
+        thesis += " ⚠️ Nifty is below its 200DMA — market regime is bearish, all signals downgraded."
+
+    # Technical
+    sma_line = (
+        "Golden cross intact — price above both SMA50 and SMA200."
+        if metrics["Price"] > metrics["SMA50"] > metrics["SMA200"]
+        else "Early recovery — price above SMA200 but SMA50 still lagging."
+        if metrics["Price"] > metrics["SMA200"]
+        else "Bearish structure — price below SMA200."
+    )
+    mom3 = momentum_data.get("Momentum3M")
+    mom6 = momentum_data.get("Momentum6M")
+    mom12 = momentum_data.get("Momentum12M")
+    consist = momentum_data.get("TrendConsistency", 50)
+    mom_line = (f"Momentum profile: 3M {mom3:+.1f}% / "
+                f"6M {f'{mom6:+.1f}%' if mom6 is not None else 'N/A'} / "
+                f"12M {f'{mom12:+.1f}%' if mom12 is not None else 'N/A'}. "
+                f"Trend consistency: {consist}% of recent weeks closed up.")
+
+    # CANSLIM
+    strengths, gaps = [], []
+    if canslim_scores.get("C_CurrentMomentum", 0) >= 10: strengths.append("strong current momentum (C)")
+    else: gaps.append("weak current momentum (C)")
+    if canslim_scores.get("N_NewHighs", 0) >= 15: strengths.append("near 52W highs (N)")
+    elif canslim_scores.get("N_NewHighs", 0) == 0: gaps.append("far from 52W highs (N)")
+    if canslim_scores.get("S_SupplyDemand", 0) >= 15: strengths.append("volume confirming price (S)")
+    else: gaps.append("volume not confirming (S)")
+    if canslim_scores.get("L_Leader", 0) >= 15: strengths.append("golden cross structure (L)")
+    else: gaps.append("lagging MA structure (L)")
+    canslim_text = (f"CANSLIM {int(canslim_total)}/100. "
+                    + (f"Strengths: {', '.join(strengths)}. " if strengths else "No strong CANSLIM signals. ")
+                    + (f"Gaps: {', '.join(gaps)}." if gaps else ""))
+
+    # Risk
+    sizing = (f"ATR stop at ₹{risk_metrics['StopLoss']} ({risk_metrics['StopLossPct']:.1f}% risk). "
+              f"2R target ₹{risk_metrics['Target2R']}. "
+              f"Suggested: {risk_metrics['Shares']} shares "
+              f"(₹{risk_metrics['PositionValue']:,.0f}, {risk_metrics['PositionPct']:.1f}% of capital).")
+
+    # Conviction
+    if master_score >= 80 and minervini_passed >= 7:
+        conviction, reason = "HIGH", "Master Score and Minervini both confirm a clean Stage 2 setup."
+    elif master_score >= 65 and minervini_passed >= 5:
+        conviction, reason = "MEDIUM", "Good setup but not all frameworks fully aligned — start with half position."
+    else:
+        conviction, reason = "LOW", "Too many framework conditions unmet to justify full commitment."
+
+    if market_regime == "Bear":
+        conviction = "LOW" if conviction == "MEDIUM" else conviction
+        reason += " Bear market regime active — size down."
+
+    return f"""
+**1. INVESTMENT THESIS**
+{thesis}
+
+**2. TECHNICAL SETUP**
+{sma_line} RSI at {metrics['RSI']:.0f}. {mom_line} Relative strength vs Nifty: {metrics['RelativeStrength']:+.1f}% (3M).
+
+**3. CANSLIM ASSESSMENT**
+{canslim_text}
+
+**4. RISK ASSESSMENT**
+{risk_metrics['RiskTier']} volatility ({risk_metrics['VolatilityAnnual']:.0f}% annualised). Historical max drawdown: {risk_metrics['MaxDrawdown']:.0f}%. {sizing}
+
+**5. CONVICTION LEVEL: {conviction}**
+{reason}
+"""
+
+# =========================================================
+# MARKET REGIME BANNER
+# =========================================================
+
+regime_color = "regime-bull" if market_regime == "Bull" else "regime-bear"
+regime_label = "🟢 Bull Market — Nifty above 200DMA" if market_regime == "Bull" else "🔴 Bear Market — Nifty below 200DMA · All signals downgraded"
+st.markdown(f'<span class="{regime_color}">{regime_label}</span>', unsafe_allow_html=True)
+st.markdown("")
+
+# =========================================================
+# TABS
+# =========================================================
+
+tab1, tab2, tab3 = st.tabs(["📊 Basket Screener", "📈 Portfolio Backtest", "🔎 Single Stock Deep Dive"])
+
+# =========================================================
+# TAB 1 — BASKET SCREENER
+# =========================================================
+
+with tab1:
+    st.header("📊 Basket Screener")
+
+    col_basket, col_framework = st.columns(2)
+
+    with col_basket:
+        basket_choice = st.selectbox("Select Index Basket", list(BASKETS.keys()))
+
+    with col_framework:
+        framework_choice = st.selectbox(
+            "Scoring Framework",
+            ["Master Score (All Frameworks)", "CANSLIM Only", "Minervini Only", "Momentum Only"]
+        )
+
+    if basket_choice == "Custom":
+        custom_input = st.text_input("Enter Custom Tickers (comma-separated)", "COALINDIA,BEL,TRENT,MAZDOCK,NLCINDIA")
+        tickers_to_screen = [t.strip() for t in custom_input.split(",") if t.strip()]
+    else:
+        tickers_to_screen = BASKETS[basket_choice]
+
+    st.caption(f"{len(tickers_to_screen)} stocks in {basket_choice} · Framework: {framework_choice}")
+
+    min_master = st.slider("Minimum Master Score to show", 0, 100, 0, 5)
+
+    if st.button("🚀 Run Screener", type="primary", key="run_screener"):
+        screener_rows = []
+        skipped = []
+        returns_12m = {}
+
+        progress_bar = st.progress(0)
+        status = st.empty()
+
+        # Pass 1: fetch all data and compute 12M returns for RS Rank
+        all_data = {}
+        for i, ticker in enumerate(tickers_to_screen):
+            status.text(f"Fetching {ticker}... ({i+1}/{len(tickers_to_screen)})")
+            df = fetch_data(ticker)
+            if df.empty or "Close" not in df.columns or len(df) < 252:
+                skipped.append(f"{ticker} — insufficient data")
+                progress_bar.progress((i + 1) / len(tickers_to_screen))
+                continue
+            all_data[ticker] = df
+            if len(df["Close"]) >= 252:
+                returns_12m[ticker] = float(df["Close"].iloc[-1] / df["Close"].iloc[-252] - 1) * 100
+            progress_bar.progress((i + 1) / len(tickers_to_screen))
+
+        # Compute RS Ranks across universe
+        rs_ranks = compute_rs_ranks(returns_12m)
+
+        # Pass 2: full scoring
+        for ticker, df in all_data.items():
+            try:
+                metrics      = compute_metrics(df, benchmark_df)
+                canslim_s, canslim_t = compute_canslim_score(df)
+                _, min_passed, min_pct = compute_minervini_score(df)
+                mom_data     = compute_momentum_score(df)
+                rs_rank      = rs_ranks.get(ticker, 50)
+                master, rec  = compute_master_score(
+                    metrics["Score"], canslim_t, min_pct,
+                    mom_data["MomentumScore"], rs_rank, market_regime
+                )
+
+                if master < min_master:
+                    continue
+
+                # Choose display score by framework
+                if framework_choice == "CANSLIM Only":
+                    display_score, display_rec = int(canslim_t), (
+                        "🟢 Strong Buy" if canslim_t >= 80 else
+                        "🟢 Buy" if canslim_t >= 60 else
+                        "🟠 Watch" if canslim_t >= 40 else "🔴 Avoid"
+                    )
+                elif framework_choice == "Minervini Only":
+                    display_score, display_rec = min_pct, (
+                        "🟢 Strong Buy" if min_pct == 100 else
+                        "🟢 Buy" if min_pct >= 75 else
+                        "🟠 Watch" if min_pct >= 50 else "🔴 Avoid"
+                    )
+                elif framework_choice == "Momentum Only":
+                    display_score, display_rec = mom_data["MomentumScore"], (
+                        "🟢 Strong Buy" if mom_data["MomentumScore"] >= 75 else
+                        "🟢 Buy" if mom_data["MomentumScore"] >= 55 else
+                        "🟠 Watch" if mom_data["MomentumScore"] >= 35 else "🔴 Avoid"
+                    )
+                else:
+                    display_score, display_rec = master, rec
+
+                screener_rows.append({
+                    "Ticker":        ticker,
+                    "Master Score":  master,
+                    "CANSLIM":       int(canslim_t),
+                    "Minervini/8":   min_passed,
+                    "Momentum Score":mom_data["MomentumScore"],
+                    "RS Rank":       rs_rank,
+                    "Rec":           display_rec,
+                    "Structure":     metrics["Structure"],
+                    "RSI":           metrics["RSI"],
+                    "3M Mom%":       metrics["Momentum3M"],
+                    "6M Mom%":       mom_data.get("Momentum6M"),
+                    "12M Mom%":      mom_data.get("Momentum12M"),
+                    "Trend Consist%":mom_data.get("TrendConsistency"),
+                    "Rel Strength%": metrics["RelativeStrength"],
+                    "Volatility%":   metrics["Volatility"],
+                    "RiskTier":      compute_risk_metrics(df)["RiskTier"],
+                })
+            except Exception as e:
+                skipped.append(f"{ticker} — error: {str(e)[:40]}")
+
+        status.empty()
+        progress_bar.empty()
+
+        if screener_rows:
+            sort_col = "Master Score" if "Master" in framework_choice else (
+                "CANSLIM" if "CANSLIM" in framework_choice else (
+                "Minervini/8" if "Minervini" in framework_choice else "Momentum Score"
+            ))
+            result_df = pd.DataFrame(screener_rows).sort_values(by=sort_col, ascending=False)
+            st.dataframe(result_df, use_container_width=True, hide_index=True)
+            st.caption(f"Showing {len(result_df)} of {len(tickers_to_screen)} stocks")
+        else:
+            st.warning("No stocks passed the minimum score filter.")
+
+        if skipped:
+            with st.expander(f"⚠️ {len(skipped)} ticker(s) skipped"):
+                for s in skipped:
+                    st.write("•", s)
+
+# =========================================================
+# TAB 2 — PORTFOLIO BACKTEST
+# =========================================================
+
+with tab2:
+    st.header("📈 Portfolio Backtest")
+
+    portfolio_input = st.text_input("Portfolio Tickers", "RELIANCE,TCS,INFY,HDFCBANK,ICICIBANK")
+    col_y, col_c = st.columns(2)
+    with col_y:
+        years = st.slider("Backtest Years", 1, 10, 5)
+    with col_c:
+        capital = st.number_input("Portfolio Capital (₹)", 10000, 10000000, 100000, 10000, format="%d")
+    risk_per_trade = st.slider("Risk Per Trade (% of capital)", 0.5, 5.0, 1.5, 0.25)
+
+    if st.button("Run Portfolio Backtest", key="run_backtest"):
+        tickers = [t.strip() for t in portfolio_input.split(",") if t.strip()]
+        benchmark_returns = benchmark_df["Close"].pct_change().fillna(0)
+        port_returns, sel_tickers, port_risk = [], [], []
+
+        for ticker in tickers:
             df = fetch_data(ticker, period=f"{years}y")
             if df.empty or "Close" not in df.columns or len(df) < 250:
                 continue
-            selected_tickers.append(ticker)
-            portfolio_returns.append(df["Close"].pct_change().fillna(0))
-            risk = compute_risk_metrics(df, capital=capital / len(tickers), risk_per_trade_pct=risk_per_trade)
-            portfolio_risk_data.append({"Ticker": ticker, **risk})
-        except Exception:
-            pass
+            sel_tickers.append(ticker)
+            port_returns.append(df["Close"].pct_change().fillna(0))
+            port_risk.append({"Ticker": ticker,
+                               **compute_risk_metrics(df, capital/len(tickers), risk_per_trade)})
 
-    if portfolio_returns:
-        aligned = pd.concat(portfolio_returns, axis=1)
-        aligned.columns = selected_tickers
-        strategy_returns = aligned.mean(axis=1)
-        strategy_curve = (1 + strategy_returns).cumprod()
-        benchmark_curve = (1 + benchmark_returns.reindex(strategy_curve.index).fillna(0)).cumprod()
+        if port_returns:
+            aligned = pd.concat(port_returns, axis=1)
+            aligned.columns = sel_tickers
+            strat_ret = aligned.mean(axis=1)
+            strat_curve = (1 + strat_ret).cumprod()
+            bench_curve = (1 + benchmark_returns.reindex(strat_curve.index).fillna(0)).cumprod()
 
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=strategy_curve.index, y=strategy_curve, name="Strategy",
-                                  line=dict(color="#2ecc71", width=2)))
-        fig.add_trace(go.Scatter(x=benchmark_curve.index, y=benchmark_curve, name="Nifty 50",
-                                  line=dict(color="#3498db", width=2, dash="dash")))
-        fig.update_layout(template="plotly_dark", title="Portfolio vs Benchmark (Equal Weight)",
-                          yaxis_title="Cumulative Return",
-                          legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-        st.plotly_chart(fig, use_container_width=True)
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=strat_curve.index, y=strat_curve, name="Strategy",
+                                      line=dict(color="#2ecc71", width=2)))
+            fig.add_trace(go.Scatter(x=bench_curve.index, y=bench_curve, name="Nifty 50",
+                                      line=dict(color="#3498db", width=2, dash="dash")))
+            fig.update_layout(template="plotly_dark", title="Portfolio vs Benchmark (Equal Weight)",
+                              yaxis_title="Cumulative Return",
+                              legend=dict(orientation="h", yanchor="bottom", y=1.02))
+            st.plotly_chart(fig, use_container_width=True)
 
-        strategy_return = (strategy_curve.iloc[-1] - 1) * 100
-        bench_return = (benchmark_curve.iloc[-1] - 1) * 100
-        cagr = (strategy_curve.iloc[-1] ** (1 / years) - 1) * 100
-        rf_daily = 0.065 / 252
-        excess = strategy_returns - rf_daily
-        sharpe = (excess.mean() / strategy_returns.std()) * np.sqrt(252)
-        downside = strategy_returns[strategy_returns < 0]
-        sortino = (excess.mean() / downside.std()) * np.sqrt(252) if downside.std() != 0 else 0
-        max_drawdown = ((strategy_curve / strategy_curve.cummax() - 1).min()) * 100
-        calmar = cagr / abs(max_drawdown) if max_drawdown != 0 else 0
+            sr = (strat_curve.iloc[-1] - 1) * 100
+            br = (bench_curve.iloc[-1] - 1) * 100
+            cagr = (strat_curve.iloc[-1] ** (1/years) - 1) * 100
+            rf = 0.065 / 252
+            excess = strat_ret - rf
+            sharpe  = (excess.mean() / strat_ret.std()) * np.sqrt(252)
+            down    = strat_ret[strat_ret < 0]
+            sortino = (excess.mean() / down.std()) * np.sqrt(252) if down.std() != 0 else 0
+            max_dd  = ((strat_curve / strat_curve.cummax() - 1).min()) * 100
+            calmar  = cagr / abs(max_dd) if max_dd != 0 else 0
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Strategy Return", f"{strategy_return:.1f}%", f"{strategy_return - bench_return:+.1f}% vs Nifty")
-        c2.metric("CAGR", f"{cagr:.1f}%")
-        c3.metric("Sharpe Ratio", f"{sharpe:.2f}", help="Adjusted for 6.5% Indian risk-free rate")
-        c4.metric("Sortino Ratio", f"{sortino:.2f}")
+            c1,c2,c3,c4 = st.columns(4)
+            c1.metric("Strategy Return", f"{sr:.1f}%", f"{sr-br:+.1f}% vs Nifty")
+            c2.metric("CAGR", f"{cagr:.1f}%")
+            c3.metric("Sharpe Ratio", f"{sharpe:.2f}", help="6.5% risk-free rate")
+            c4.metric("Sortino Ratio", f"{sortino:.2f}")
 
-        c5, c6, c7, c8 = st.columns(4)
-        c5.metric("Max Drawdown", f"{max_drawdown:.1f}%")
-        c6.metric("Calmar Ratio", f"{calmar:.2f}")
-        c7.metric("Benchmark Return", f"{bench_return:.1f}%")
-        c8.metric("Alpha", f"{strategy_return - bench_return:.1f}%")
+            c5,c6,c7,c8 = st.columns(4)
+            c5.metric("Max Drawdown", f"{max_dd:.1f}%")
+            c6.metric("Calmar Ratio", f"{calmar:.2f}")
+            c7.metric("Benchmark Return", f"{br:.1f}%")
+            c8.metric("Alpha", f"{sr-br:.1f}%")
 
-        st.subheader("⚠️ Per-Stock Risk Profile")
-        if portfolio_risk_data:
-            rdf = pd.DataFrame(portfolio_risk_data)[
-                ["Ticker", "RiskTier", "StopLoss", "StopLossPct",
-                 "Target2R", "VolatilityAnnual", "MaxDrawdown", "Shares", "PositionValue"]
-            ]
-            rdf.columns = ["Ticker", "Risk Tier", "Stop ₹", "Stop %", "2R Target ₹",
-                           "Vol %", "Max DD %", "Shares", "Position ₹"]
-            st.dataframe(rdf, use_container_width=True)
-
-        st.subheader("🧠 Portfolio Interpretation")
-        if strategy_return > bench_return:
-            st.success(f"✅ Strategy outperformed Nifty 50 by {strategy_return - bench_return:.1f}% over {years} years.")
-        else:
-            st.warning(f"⚠️ Strategy underperformed Nifty 50 by {bench_return - strategy_return:.1f}% over {years} years.")
-        if sharpe > 1.5:
-            st.info(f"📊 Sharpe of {sharpe:.2f} — strong risk-adjusted returns for Indian market conditions.")
-        elif sharpe > 1:
-            st.info(f"📊 Sharpe of {sharpe:.2f} — acceptable. Tighten stock selection to improve further.")
-        else:
-            st.warning(f"📊 Sharpe of {sharpe:.2f} — below acceptable. Review entry criteria and diversification.")
-    else:
-        st.error("No valid portfolio data fetched.")
-
-# =========================================================
-# SINGLE STOCK ANALYSIS
-# =========================================================
-
-st.header("🔎 Single Stock Deep Dive")
-
-col_t, col_c = st.columns([2, 1])
-with col_t:
-    single_ticker = st.text_input("Ticker", "RELIANCE")
-with col_c:
-    analysis_capital = st.number_input("Capital for Sizing (₹)", min_value=10000,
-                                        max_value=10000000, value=500000, step=10000, format="%d")
-
-analysis_risk_pct = st.slider("Risk Per Trade %", 0.5, 5.0, 1.5, 0.25, key="single_risk")
-
-if st.button("Analyze Stock", type="primary"):
-
-    df = fetch_data(single_ticker)
-
-    if df.empty or "Close" not in df.columns or len(df) < 250:
-        st.error("Not enough data (minimum 250 trading days required).")
-    else:
-        with st.spinner("Computing metrics..."):
-            metrics = compute_metrics(df, benchmark_df)
-            canslim_scores, canslim_total = compute_canslim_score(df)
-            risk_metrics = compute_risk_metrics(df, capital=analysis_capital, risk_per_trade_pct=analysis_risk_pct)
-            scenarios = compute_probability_scenarios(
-                metrics["Score"], canslim_total,
-                metrics["RSI"], metrics["Momentum"], metrics["RelativeStrength"]
-            )
-
-        st.subheader(
-            f"Recommendation: {metrics['Recommendation']}  |  Score: {metrics['Score']}/100  |  CANSLIM: {int(canslim_total)}/100"
-        )
-
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Price", f"₹{metrics['Price']}")
-        c2.metric("RSI (14)", metrics["RSI"])
-        c3.metric("Momentum 3M", f"{metrics['Momentum']:+.1f}%")
-        c4.metric("Rel. Strength", f"{metrics['RelativeStrength']:+.1f}%")
-        c5.metric("Annual Vol", f"{metrics['Volatility']:.1f}%")
-
-        # Price Chart
-        st.subheader("📉 Price Chart")
-        close = df["Close"]
-        sma50 = close.rolling(50).mean()
-        sma200 = close.rolling(200).mean()
-
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df.index, y=close, name="Price", line=dict(color="#ffffff", width=1.5)))
-        fig.add_trace(go.Scatter(x=df.index, y=sma50, name="SMA 50", line=dict(color="#f39c12", width=1.2, dash="dash")))
-        fig.add_trace(go.Scatter(x=df.index, y=sma200, name="SMA 200", line=dict(color="#e74c3c", width=1.2, dash="dot")))
-        fig.add_hline(y=risk_metrics["StopLoss"], line_color="#e74c3c", line_dash="dash", line_width=1,
-                      annotation_text=f"Stop ₹{risk_metrics['StopLoss']}", annotation_position="bottom right")
-        fig.add_hline(y=risk_metrics["Target2R"], line_color="#2ecc71", line_dash="dash", line_width=1,
-                      annotation_text=f"2R Target ₹{risk_metrics['Target2R']}", annotation_position="top right")
-        fig.update_layout(template="plotly_dark", height=420, margin=dict(l=0, r=0, t=30, b=0),
-                          legend=dict(orientation="h", yanchor="bottom", y=1.02))
-        st.plotly_chart(fig, use_container_width=True)
-
-        # CANSLIM + Risk side by side
-        col_left, col_right = st.columns(2)
-
-        with col_left:
-            st.markdown("### 📐 CANSLIM Breakdown")
-            for key, (label, max_score) in {
-                "C_CurrentMomentum": ("C – Current Momentum", 20),
-                "A_AnnualTrend": ("A – Annual Trend", 15),
-                "N_NewHighs": ("N – New High Proximity", 15),
-                "S_SupplyDemand": ("S – Supply/Demand (Vol)", 15),
-                "L_Leader": ("L – Leader vs Laggard", 15),
-                "I_Institutional": ("I – Institutional Support", 10),
-                "M_MarketDirection": ("M – Market Direction", 10),
-            }.items():
-                val = canslim_scores.get(key, 0)
-                pct = int((val / max_score) * 100)
-                st.markdown(f"**{label}** — {val:.0f}/{max_score}")
-                st.markdown(
-                    f'<div class="canslim-bar"><div class="canslim-fill" style="width:{pct}%"></div></div>',
-                    unsafe_allow_html=True
-                )
-            st.markdown(f"**Total: {int(canslim_total)}/100**")
-
-        with col_right:
-            st.markdown("### ⚠️ Risk Management")
-            risk_color = {"Low": "risk-low", "Medium": "risk-med", "High": "risk-high"}[risk_metrics["RiskTier"]]
-            st.markdown(f'Risk Tier: <span class="risk-badge {risk_color}">{risk_metrics["RiskTier"]}</span>',
-                        unsafe_allow_html=True)
-            st.markdown("**Entry / Exit Levels**")
-            st.dataframe(pd.DataFrame({
-                "Level": ["Current Price", "Stop Loss (2× ATR)", "1R Target", "2R Target", "3R Target"],
-                "Price (₹)": [
-                    f"₹{risk_metrics['CurrentPrice']}",
-                    f"₹{risk_metrics['StopLoss']} ({risk_metrics['StopLossPct']:.1f}% risk)",
-                    f"₹{risk_metrics['Target1R']}",
-                    f"₹{risk_metrics['Target2R']}",
-                    f"₹{risk_metrics['Target3R']}"
+            st.subheader("⚠️ Per-Stock Risk Profile")
+            if port_risk:
+                rdf = pd.DataFrame(port_risk)[
+                    ["Ticker","RiskTier","StopLoss","StopLossPct","Target2R",
+                     "VolatilityAnnual","MaxDrawdown","Shares","PositionValue"]
                 ]
-            }), use_container_width=True, hide_index=True)
-            st.markdown("**Position Sizing**")
-            st.markdown(f"""
+                rdf.columns = ["Ticker","Risk Tier","Stop ₹","Stop %",
+                                "2R Target ₹","Vol %","Max DD %","Shares","Position ₹"]
+                st.dataframe(rdf, use_container_width=True, hide_index=True)
+
+            st.subheader("🧠 Interpretation")
+            if sr > br:
+                st.success(f"✅ Outperformed Nifty by {sr-br:.1f}% over {years} years.")
+            else:
+                st.warning(f"⚠️ Underperformed Nifty by {br-sr:.1f}% over {years} years.")
+            if sharpe > 1.5:
+                st.info(f"📊 Sharpe {sharpe:.2f} — strong risk-adjusted returns.")
+            elif sharpe > 1:
+                st.info(f"📊 Sharpe {sharpe:.2f} — acceptable. Tighten stock selection to improve.")
+            else:
+                st.warning(f"📊 Sharpe {sharpe:.2f} — below acceptable. Review entry criteria.")
+        else:
+            st.error("No valid portfolio data fetched.")
+
+# =========================================================
+# TAB 3 — SINGLE STOCK DEEP DIVE
+# =========================================================
+
+with tab3:
+    st.header("🔎 Single Stock Deep Dive")
+
+    col_t, col_c2 = st.columns([2, 1])
+    with col_t:
+        single_ticker = st.text_input("Ticker (e.g. RELIANCE, TCS, NLCINDIA)", "RELIANCE")
+    with col_c2:
+        analysis_capital = st.number_input("Capital for Sizing (₹)", 10000, 10000000,
+                                            500000, 10000, format="%d")
+    analysis_risk = st.slider("Risk Per Trade %", 0.5, 5.0, 1.5, 0.25, key="single_risk")
+
+    if st.button("Analyze Stock", type="primary", key="analyze"):
+        df = fetch_data(single_ticker)
+
+        if df.empty or "Close" not in df.columns or len(df) < 252:
+            st.error("Not enough data — need at least 252 trading days (1 year). Check the ticker name.")
+        else:
+            with st.spinner("Running all frameworks..."):
+                metrics          = compute_metrics(df, benchmark_df)
+                canslim_s, canslim_t = compute_canslim_score(df)
+                min_conds, min_passed, min_pct = compute_minervini_score(df)
+                mom_data         = compute_momentum_score(df)
+                risk_metrics     = compute_risk_metrics(df, analysis_capital, analysis_risk)
+                # RS rank vs Nifty 50 universe for context
+                rs_rank_val      = 50  # placeholder (needs full universe)
+                master, master_rec = compute_master_score(
+                    metrics["Score"], canslim_t, min_pct,
+                    mom_data["MomentumScore"], rs_rank_val, market_regime
+                )
+                scenarios = compute_probability_scenarios(
+                    master, metrics["RSI"], metrics["Momentum3M"], metrics["RelativeStrength"]
+                )
+
+            # Header
+            st.subheader(f"{master_rec}  |  Master Score: {master}/100  |  CANSLIM: {int(canslim_t)}/100  |  Minervini: {min_passed}/8")
+
+            # Key metrics
+            c1,c2,c3,c4,c5 = st.columns(5)
+            c1.metric("Price", f"₹{metrics['Price']}")
+            c2.metric("RSI (14)", f"{metrics['RSI']:.1f}")
+            c3.metric("3M Momentum", f"{metrics['Momentum3M']:+.1f}%")
+            c4.metric("Rel. Strength", f"{metrics['RelativeStrength']:+.1f}%")
+            c5.metric("Annual Vol", f"{metrics['Volatility']:.1f}%")
+
+            c6,c7,c8 = st.columns(3)
+            c6.metric("6M Momentum", f"{mom_data.get('Momentum6M', 0):+.1f}%" if mom_data.get('Momentum6M') else "N/A")
+            c7.metric("12M Momentum", f"{mom_data.get('Momentum12M', 0):+.1f}%" if mom_data.get('Momentum12M') else "N/A")
+            c8.metric("Trend Consistency", f"{mom_data.get('TrendConsistency', 0)}% up-weeks")
+
+            # Price Chart
+            st.subheader("📉 Price Chart")
+            close  = df["Close"]
+            sma50  = close.rolling(50).mean()
+            sma150 = close.rolling(150).mean()
+            sma200 = close.rolling(200).mean()
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df.index, y=close,  name="Price",   line=dict(color="#ffffff", width=1.5)))
+            fig.add_trace(go.Scatter(x=df.index, y=sma50,  name="SMA 50",  line=dict(color="#f39c12", width=1.2, dash="dash")))
+            fig.add_trace(go.Scatter(x=df.index, y=sma150, name="SMA 150", line=dict(color="#9b59b6", width=1.0, dash="dot")))
+            fig.add_trace(go.Scatter(x=df.index, y=sma200, name="SMA 200", line=dict(color="#e74c3c", width=1.2, dash="dot")))
+
+            # 52W high/low reference
+            high_52w = close.rolling(252).max().iloc[-1]
+            low_52w  = close.rolling(252).min().iloc[-1]
+            fig.add_hline(y=float(high_52w), line_color="#2ecc71", line_dash="dot", line_width=1,
+                          annotation_text=f"52W High ₹{high_52w:.0f}", annotation_position="top right")
+            fig.add_hline(y=float(low_52w), line_color="#e74c3c", line_dash="dot", line_width=1,
+                          annotation_text=f"52W Low ₹{low_52w:.0f}", annotation_position="bottom right")
+            fig.add_hline(y=risk_metrics["StopLoss"], line_color="#e74c3c", line_dash="dash", line_width=1.5,
+                          annotation_text=f"Stop ₹{risk_metrics['StopLoss']}", annotation_position="bottom left")
+            fig.add_hline(y=risk_metrics["Target2R"], line_color="#2ecc71", line_dash="dash", line_width=1.5,
+                          annotation_text=f"2R ₹{risk_metrics['Target2R']}", annotation_position="top left")
+
+            fig.update_layout(template="plotly_dark", height=450,
+                              margin=dict(l=0, r=0, t=30, b=0),
+                              legend=dict(orientation="h", yanchor="bottom", y=1.02))
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Three-column: CANSLIM | Minervini | Risk
+            col_a, col_b, col_c = st.columns(3)
+
+            with col_a:
+                st.markdown("### 📐 CANSLIM")
+                for key, (label, max_s) in {
+                    "C_CurrentMomentum": ("C – Current Momentum", 20),
+                    "A_AnnualTrend":     ("A – Annual Trend", 15),
+                    "N_NewHighs":        ("N – New Highs", 15),
+                    "S_SupplyDemand":    ("S – Supply/Demand", 15),
+                    "L_Leader":          ("L – Leader", 15),
+                    "I_Institutional":   ("I – Institutional", 10),
+                    "M_MarketDirection": ("M – Market", 10),
+                }.items():
+                    val = canslim_s.get(key, 0)
+                    pct = int(val / max_s * 100)
+                    st.markdown(f"**{label}** — {val:.0f}/{max_s}")
+                    st.markdown(f'<div class="canslim-bar"><div class="canslim-fill" style="width:{pct}%"></div></div>',
+                                unsafe_allow_html=True)
+                st.markdown(f"**Total: {int(canslim_t)}/100**")
+
+            with col_b:
+                st.markdown("### 📏 Minervini Template")
+                for cond, passed in min_conds.items():
+                    badge = '<span class="pass-badge">PASS</span>' if passed else '<span class="fail-badge">FAIL</span>'
+                    st.markdown(f"{badge} {cond}", unsafe_allow_html=True)
+                st.markdown(f"**{min_passed}/8 conditions passed ({min_pct}%)**")
+                if min_passed == 8:
+                    st.success("✅ Full Stage 2 Uptrend Confirmed")
+                elif min_passed >= 6:
+                    st.info(f"⚡ Strong setup — {8 - min_passed} condition(s) short of full confirmation")
+                elif min_passed >= 4:
+                    st.warning(f"⚠️ Partial setup — {8 - min_passed} conditions still unmet")
+                else:
+                    st.error(f"❌ Weak setup — only {min_passed}/8 conditions met")
+
+            with col_c:
+                st.markdown("### ⚠️ Risk Management")
+                risk_color = {"Low":"risk-low","Medium":"risk-med","High":"risk-high"}[risk_metrics["RiskTier"]]
+                st.markdown(f'Risk Tier: <span class="risk-badge {risk_color}">{risk_metrics["RiskTier"]}</span>',
+                            unsafe_allow_html=True)
+                st.dataframe(pd.DataFrame({
+                    "Level":    ["Current Price","Stop (2×ATR)","1R Target","2R Target","3R Target"],
+                    "Price ₹":  [f"₹{risk_metrics['CurrentPrice']}",
+                                  f"₹{risk_metrics['StopLoss']} ({risk_metrics['StopLossPct']:.1f}%)",
+                                  f"₹{risk_metrics['Target1R']}",
+                                  f"₹{risk_metrics['Target2R']}",
+                                  f"₹{risk_metrics['Target3R']}"]
+                }), use_container_width=True, hide_index=True)
+                st.markdown(f"""
 - Capital: ₹{analysis_capital:,.0f}
-- Risk per trade: {analysis_risk_pct}% = ₹{risk_metrics['RiskAmount']:,.0f}
-- ATR (14-day): ₹{risk_metrics['ATR']}
-- Suggested shares: **{risk_metrics['Shares']}**
-- Position value: **₹{risk_metrics['PositionValue']:,.0f}** ({risk_metrics['PositionPct']:.1f}% of capital)
-- Max Drawdown (historical): {risk_metrics['MaxDrawdown']:.1f}%
-- Current Drawdown: {risk_metrics['CurrentDrawdown']:.1f}%
+- Risk: {analysis_risk}% = ₹{risk_metrics['RiskAmount']:,.0f}
+- ATR: ₹{risk_metrics['ATR']}
+- Shares: **{risk_metrics['Shares']}**
+- Position: **₹{risk_metrics['PositionValue']:,.0f}** ({risk_metrics['PositionPct']:.1f}%)
+- Max DD: {risk_metrics['MaxDrawdown']:.1f}% · Current DD: {risk_metrics['CurrentDrawdown']:.1f}%
 """)
 
-        # Probability Scenarios
-        st.markdown("### 🎯 Probability Scenarios")
-        st.caption("Derived from Score, CANSLIM, RSI, Momentum, and Relative Strength — not hardcoded")
+            # Probability Scenarios
+            st.markdown("### 🎯 Probability Scenarios")
+            st.caption("Derived from Master Score, RSI, Momentum, and Relative Strength")
+            bull_p = scenarios["Bullish Continuation"]
+            side_p = scenarios["Sideways Consolidation"]
+            bear_p = scenarios["Bearish Breakdown"]
+            s1,s2,s3 = st.columns(3)
+            s1.metric("🟢 Bullish", f"{bull_p:.0f}%")
+            s2.metric("🟡 Sideways", f"{side_p:.0f}%")
+            s3.metric("🔴 Bearish", f"{bear_p:.0f}%")
+            fig_p = go.Figure(go.Bar(
+                x=[bull_p, side_p, bear_p], y=["Bullish","Sideways","Bearish"],
+                orientation="h", marker_color=["#2ecc71","#f39c12","#e74c3c"],
+                text=[f"{v:.0f}%" for v in [bull_p, side_p, bear_p]], textposition="inside"
+            ))
+            fig_p.update_layout(template="plotly_dark", height=150,
+                                 margin=dict(l=0,r=0,t=5,b=5),
+                                 showlegend=False, xaxis=dict(range=[0,100]))
+            st.plotly_chart(fig_p, use_container_width=True)
 
-        bull_prob = scenarios["Bullish Continuation"]
-        side_prob = scenarios["Sideways Consolidation"]
-        bear_prob = scenarios["Bearish Breakdown"]
+            # Bullish / Risk factors
+            col_bull, col_risk = st.columns(2)
+            with col_bull:
+                st.markdown("### ✅ Bullish Factors")
+                bl = []
+                if metrics["Price"] > metrics["SMA200"]: bl.append("Price above 200DMA")
+                if metrics["RelativeStrength"] > 0: bl.append(f"Outperforming Nifty by {metrics['RelativeStrength']:.1f}%")
+                if metrics["RSI"] > 55: bl.append(f"RSI at {metrics['RSI']:.0f} — healthy")
+                if min_passed >= 6: bl.append(f"Minervini {min_passed}/8 conditions — strong structure")
+                if canslim_s.get("N_NewHighs", 0) >= 15: bl.append("Near 52-week highs")
+                if canslim_s.get("S_SupplyDemand", 0) >= 15: bl.append("Volume confirming price strength")
+                if mom_data.get("TrendConsistency", 0) >= 60: bl.append(f"High trend consistency ({mom_data['TrendConsistency']}% up-weeks)")
+                if not bl: bl.append("No major bullish signals currently")
+                for b in bl: st.write("•", b)
 
-        s1, s2, s3 = st.columns(3)
-        s1.metric("🟢 Bullish Continuation", f"{bull_prob:.0f}%")
-        s2.metric("🟡 Sideways Consolidation", f"{side_prob:.0f}%")
-        s3.metric("🔴 Bearish Breakdown", f"{bear_prob:.0f}%")
+            with col_risk:
+                st.markdown("### ⚠️ Risk Factors")
+                rl = []
+                if market_regime == "Bear": rl.append("Bear market regime — Nifty below 200DMA")
+                if metrics["SMA50"] < metrics["SMA200"]: rl.append("Death cross — SMA50 below SMA200")
+                if metrics["Momentum3M"] < 0: rl.append(f"Negative 3M momentum ({metrics['Momentum3M']:.1f}%)")
+                if risk_metrics["RiskTier"] == "High": rl.append(f"High volatility ({risk_metrics['VolatilityAnnual']:.0f}%)")
+                if risk_metrics["MaxDrawdown"] < -40: rl.append(f"Historical max drawdown {risk_metrics['MaxDrawdown']:.0f}%")
+                if metrics["RSI"] > 75: rl.append(f"RSI {metrics['RSI']:.0f} — overbought")
+                if min_passed < 5: rl.append(f"Only {min_passed}/8 Minervini conditions met")
+                if not rl: rl.append("No major risk factors currently")
+                for r in rl: st.write("•", r)
 
-        fig_prob = go.Figure(go.Bar(
-            x=[bull_prob, side_prob, bear_prob], y=["Bullish", "Sideways", "Bearish"],
-            orientation='h', marker_color=["#2ecc71", "#f39c12", "#e74c3c"],
-            text=[f"{v:.0f}%" for v in [bull_prob, side_prob, bear_prob]], textposition="inside"
-        ))
-        fig_prob.update_layout(template="plotly_dark", height=160,
-                               margin=dict(l=0, r=0, t=10, b=10),
-                               showlegend=False, xaxis=dict(range=[0, 100]))
-        st.plotly_chart(fig_prob, use_container_width=True)
+            # What to watch
+            st.markdown("### 👀 What To Watch Next")
+            wl = []
+            if metrics["Momentum3M"] < 0: wl.append("Watch for 3M momentum to turn positive")
+            if metrics["SMA50"] < metrics["SMA200"]: wl.append("Watch for golden cross: SMA50 crossing above SMA200")
+            if metrics["RSI"] > 70: wl.append(f"RSI at {metrics['RSI']:.0f} — watch for pullback before adding")
+            if risk_metrics["CurrentDrawdown"] < -15: wl.append(f"Currently {risk_metrics['CurrentDrawdown']:.0f}% from highs — watch for base")
+            if min_passed < 8: wl.append(f"Minervini {min_passed}/8 — watch for remaining conditions to confirm")
+            if canslim_s.get("S_SupplyDemand",0) < 8: wl.append("Volume weak — watch for volume expansion on rallies")
+            if not wl: wl.append("All systems healthy — monitor for continuation")
+            for w in wl: st.write("•", w)
 
-        # Bullish / Risk Factors
-        col_bull, col_risk = st.columns(2)
-        with col_bull:
-            st.markdown("### ✅ Bullish Factors")
-            bullish = []
-            if metrics["Price"] > metrics["SMA200"]:
-                bullish.append("Price above 200DMA — long-term institutional support intact")
-            if metrics["RelativeStrength"] > 0:
-                bullish.append(f"Outperforming Nifty by {metrics['RelativeStrength']:.1f}% (3M)")
-            if metrics["RSI"] > 55:
-                bullish.append(f"RSI at {metrics['RSI']:.0f} — healthy momentum territory")
-            if canslim_scores.get("N_NewHighs", 0) >= 15:
-                bullish.append("Near 52-week highs — price discovery phase")
-            if canslim_scores.get("S_SupplyDemand", 0) >= 15:
-                bullish.append("Volume trend confirming price — institutional accumulation signal")
-            if not bullish:
-                bullish.append("No major bullish technical factors currently visible")
-            for item in bullish:
-                st.write("•", item)
-
-        with col_risk:
-            st.markdown("### ⚠️ Risk Factors")
-            risks = []
-            if metrics["SMA50"] < metrics["SMA200"]:
-                risks.append("Death cross — SMA50 below SMA200, medium-term trend is bearish")
-            if metrics["Momentum"] < 0:
-                risks.append(f"Negative 3-month momentum ({metrics['Momentum']:.1f}%) — selling pressure")
-            if risk_metrics["RiskTier"] == "High":
-                risks.append(f"High volatility ({risk_metrics['VolatilityAnnual']:.0f}% annualised) — wide stops required")
-            if risk_metrics["MaxDrawdown"] < -40:
-                risks.append(f"Historical max drawdown of {risk_metrics['MaxDrawdown']:.0f}% — deep correction risk")
-            if metrics["RSI"] > 75:
-                risks.append(f"RSI at {metrics['RSI']:.0f} — overbought territory, correction risk")
-            if not risks:
-                risks.append("No major technical weakness currently visible")
-            for item in risks:
-                st.write("•", item)
-
-        # What To Watch
-        st.markdown("### 👀 What To Watch Next")
-        watch_items = []
-        if metrics["Momentum"] < 0:
-            watch_items.append("Watch for momentum to turn positive — key early signal")
-        if metrics["SMA50"] < metrics["SMA200"]:
-            watch_items.append("Watch for golden cross: SMA50 crossing above SMA200")
-        if metrics["RSI"] > 70:
-            watch_items.append(f"RSI at {metrics['RSI']:.0f} — watch for cooling off before adding size")
-        if risk_metrics["CurrentDrawdown"] < -15:
-            watch_items.append(f"Currently {risk_metrics['CurrentDrawdown']:.0f}% from highs — watch for base formation")
-        if canslim_scores.get("S_SupplyDemand", 0) < 8:
-            watch_items.append("Volume trend is weak — watch for volume expansion on rallies")
-        if not watch_items:
-            watch_items.append("Trend structure healthy — monitor for continuation signals")
-        for item in watch_items:
-            st.write("•", item)
-
-        # Research Note
-        st.markdown("### 🧠 Research Note")
-        st.caption("Smart rule-based analysis — structured like an institutional research note · No API cost")
-
-        note = generate_research_note(
-            single_ticker, metrics, canslim_scores,
-            canslim_total, risk_metrics, scenarios
-        )
-        st.markdown(note)
+            # Research Note
+            st.markdown("### 🧠 Research Note")
+            st.caption("Rule-based · Multi-framework synthesis · No API cost")
+            note = generate_research_note(
+                single_ticker, metrics, canslim_s, canslim_t,
+                min_passed, mom_data, master, master_rec,
+                risk_metrics, scenarios, market_regime
+            )
+            st.markdown(note)
