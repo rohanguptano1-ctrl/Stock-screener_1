@@ -1109,362 +1109,557 @@ with tab3:
 
 
 # =========================================================
+# NAME → NSE TICKER MAP (for Groww Excel parsing)
+# =========================================================
+
+NAME_TO_TICKER = {
+    # Rohan's portfolio
+    "ANANT RAJ LIMITED":              "ANANTRAJ",
+    "APOLLO TYRES LTD":              "APOLLOTYRE",
+    "AVENUE SUPERMARTS LIMITED":     "DMART",
+    "CRISIL LTD":                    "CRISIL",
+    "HINDUSTAN AERONAUTICS LTD":     "HAL",
+    "ICICI BANK LTD.":               "ICICIBANK",
+    "ICICI BANK LTD":                "ICICIBANK",
+    "INDEGENE LIMITED":              "INDEGENE",
+    "JIO FIN SERVICES LTD":          "JIOFIN",
+    "JIO FINANCIAL SERVICES LTD":    "JIOFIN",
+    "KALYAN JEWELLERS IND LTD":      "KALYANKJIL",
+    "KRN HEAT EXCHANGE N REF L":     "KRNHEAT",
+    "NTPC LTD":                      "NTPC",
+    "NTPC LIMITED":                  "NTPC",
+    "RAILTEL CORP OF IND LTD":       "RAILTEL",
+    "RELIANCE INDUSTRIES LTD":       "RELIANCE",
+    "RELIANCE INDUSTRIES LIMITED":   "RELIANCE",
+    "SAGILITY LIMITED":              "SAGILITY",
+    "STYRENIX PERFORMANCE LTD":      "STYRENIX",
+    "TAKE SOLUTIONS LTD":            "TAKE",
+    "TATA MOTORS PASS VEH LTD":      "TATAMOTORS",
+    "TATA MOTORS LTD":               "TATAMOTORS",
+    "TECHNO ELEC & ENG CO. LTD":     "TECHNOE",
+    "TECHNO ELEC & ENG CO LTD":      "TECHNOE",
+    "VARUN BEVERAGES LIMITED":       "VBL",
+    # Nifty 50 / common stocks
+    "TATA CONSULTANCY SERVICES LTD": "TCS",
+    "INFOSYS LTD":                   "INFY",
+    "HDFC BANK LTD":                 "HDFCBANK",
+    "HINDUSTAN UNILEVER LTD":        "HINDUNILVR",
+    "ITC LTD":                       "ITC",
+    "AXIS BANK LTD":                 "AXISBANK",
+    "KOTAK MAHINDRA BANK LTD":       "KOTAKBANK",
+    "STATE BANK OF INDIA":           "SBIN",
+    "BAJAJ FINANCE LTD":             "BAJFINANCE",
+    "BHARTI AIRTEL LTD":             "BHARTIARTL",
+    "WIPRO LTD":                     "WIPRO",
+    "HCL TECHNOLOGIES LTD":          "HCLTECH",
+    "MARUTI SUZUKI INDIA LTD":       "MARUTI",
+    "SUN PHARMACEUTICAL INDS. LTD":  "SUNPHARMA",
+    "TITAN COMPANY LTD":             "TITAN",
+    "ULTRATECH CEMENT LTD":          "ULTRACEMCO",
+    "LARSEN & TOUBRO LTD":           "LT",
+    "POWER GRID CORP OF INDIA LTD":  "POWERGRID",
+    "COAL INDIA LTD":                "COALINDIA",
+    "BHARAT ELECTRONICS LTD":        "BEL",
+    "TATA STEEL LTD":                "TATASTEEL",
+    "HINDALCO INDUSTRIES LTD":       "HINDALCO",
+    "JSW STEEL LTD":                 "JSWSTEEL",
+    "ADANI PORTS AND SEZ LTD":       "ADANIPORTS",
+    "ADANI ENTERPRISES LTD":         "ADANIENT",
+    "MAHINDRA & MAHINDRA LTD":       "M&M",
+    "BAJAJ AUTO LTD":                "BAJAJ-AUTO",
+    "HERO MOTOCORP LTD":             "HEROMOTOCO",
+    "EICHER MOTORS LTD":             "EICHERMOT",
+    "DR. REDDY'S LABORATORIES LTD": "DRREDDY",
+    "CIPLA LTD":                     "CIPLA",
+    "DIVIS LABORATORIES LTD":        "DIVISLAB",
+    "APOLLO HOSPITALS ENTERPRISE LTD":"APOLLOHOSP",
+    "NESTLE INDIA LTD":              "NESTLEIND",
+    "BRITANNIA INDUSTRIES LTD":      "BRITANNIA",
+    "TATA CONSUMER PRODUCTS LTD":    "TATACONSUM",
+    "GRASIM INDUSTRIES LTD":         "GRASIM",
+    "BAJAJ FINSERV LTD":             "BAJAJFINSV",
+    "SBI LIFE INSURANCE CO. LTD":    "SBILIFE",
+    "HDFC LIFE INSURANCE CO. LTD":   "HDFCLIFE",
+    "SHRIRAM FINANCE LTD":           "SHRIRAMFIN",
+    "TECH MAHINDRA LTD":             "TECHM",
+    "ASIAN PAINTS LTD":              "ASIANPAINT",
+    "TRENT LIMITED":                 "TRENT",
+    "BPCL LTD":                      "BPCL",
+    "BHARAT PETROLEUM CORP LTD":     "BPCL",
+    "OIL AND NATURAL GAS CORP LTD":  "ONGC",
+    "INDUSIND BANK LTD":             "INDUSINDBK",
+}
+
+def parse_groww_excel(file) -> tuple:
+    """
+    Parse Groww Stocks Holdings Statement Excel.
+    Returns (list of equity holdings, summary dict, list of skipped items).
+    Format is always consistent: header at row index 9, data from row 10.
+    Equity ISINs start with INE. Non-equity (INF, IN002) are filtered out.
+    """
+    try:
+        df = pd.read_excel(file, sheet_name="Sheet1", header=None)
+    except Exception as e:
+        return [], {}, [f"Could not read file: {e}"]
+
+    # Summary values from known rows
+    try:
+        summary = {
+            "invested":  float(df.iloc[5, 1]),
+            "value":     float(df.iloc[6, 1]),
+            "pnl":       float(df.iloc[7, 1]),
+        }
+    except Exception:
+        summary = {}
+
+    # Data rows start at index 10 (row 11 in Excel)
+    data_rows = df.iloc[10:].copy()
+    data_rows.columns = range(len(data_rows.columns))
+
+    holdings, skipped = [], []
+
+    for _, row in data_rows.iterrows():
+        name  = str(row[0]).strip() if pd.notna(row[0]) else ""
+        isin  = str(row[1]).strip() if pd.notna(row[1]) else ""
+        qty   = row[2]
+        avg_price = row[3]
+
+        if not name or not isin or isin == "nan":
+            continue
+
+        # Filter: only equities (ISIN starts with INE)
+        if not isin.startswith("INE"):
+            skipped.append(f"{name} — skipped (non-equity: {isin[:6]}...)")
+            continue
+
+        # Skip zero quantity
+        try:
+            qty_f = float(qty)
+            if qty_f <= 0:
+                skipped.append(f"{name} — skipped (zero quantity)")
+                continue
+        except (ValueError, TypeError):
+            continue
+
+        try:
+            avg_f = float(avg_price)
+            if avg_f <= 0:
+                skipped.append(f"{name} — skipped (zero buy price)")
+                continue
+        except (ValueError, TypeError):
+            skipped.append(f"{name} — skipped (invalid buy price)")
+            continue
+
+        # Map name to NSE ticker
+        name_upper = name.upper().strip()
+        ticker = NAME_TO_TICKER.get(name_upper)
+        if not ticker:
+            # Try partial match
+            for k, v in NAME_TO_TICKER.items():
+                if k in name_upper or name_upper in k:
+                    ticker = v
+                    break
+        if not ticker:
+            # Last resort: use first word as ticker guess
+            ticker = name_upper.split()[0]
+            skipped.append(f"{name} — ticker guessed as {ticker} (verify manually)")
+
+        holdings.append({
+            "ticker":    ticker,
+            "name":      name,
+            "shares":    qty_f,
+            "buy_price": avg_f,
+        })
+
+    return holdings, summary, skipped
+
+
+# =========================================================
 # TAB 4 — PORTFOLIO INTELLIGENCE
 # =========================================================
 
 with tab4:
     st.header("💼 Portfolio Intelligence")
-    st.caption("Enter your holdings · Get framework scores, P&L, action signals, and sector breakdown")
 
-    col_help, col_ex = st.columns([3, 1])
-    with col_help:
+    # ── How to download instructions ──────────────────────
+    with st.expander("📥 How to download your Holdings Statement from Groww", expanded=False):
         st.markdown("""
-**Format:** One holding per line → `TICKER, SHARES, BUY_PRICE`
-Example: `RELIANCE, 50, 1200` means 50 shares of Reliance bought at ₹1200 each
-""")
-    with col_ex:
-        total_capital_port = st.number_input(
-            "Total Portfolio Capital (₹)",
-            min_value=10000, max_value=100000000,
-            value=500000, step=10000, format="%d",
-            help="Used to compute position concentration %"
-        )
+**On Groww App (Mobile):**
+1. Tap the **Profile icon** at the bottom right
+2. Tap **Reports**
+3. Under **Holdings**, tap **Stock Holdings Statement**
+4. Select **Excel** format
+5. Tap **Download**
 
-    portfolio_text = st.text_area(
-        "Your Holdings",
-        value="RELIANCE, 50, 1200\nCOALINDIA, 100, 400\nBEL, 200, 280\nHDFCBANK, 30, 1500\nINFY, 40, 1400",
-        height=160,
-        placeholder="TICKER, SHARES, BUY_PRICE"
-    )
+**On Groww Website (groww.in):**
+1. Click your **Profile** icon (top right)
+2. Click **Reports**
+3. Under **Holdings**, click **Stock Holdings Statement**
+4. Choose **Excel** format and click **Download**
+
+👉 **Direct link:** [groww.in/reports](https://groww.in/reports)
+
+The downloaded file will be named like:
+`Stocks_Holdings_Statement_XXXXXXXXXX_DD-MM-YYYY.xlsx`
+
+Upload that file below — no manual entry needed.
+""")
 
     st.markdown("---")
 
-    # Watchlist section
+    # ── Upload section ─────────────────────────────────────
+    st.markdown("### 📂 Upload Groww Holdings Statement")
+
+    col_up, col_cap = st.columns([2, 1])
+    with col_up:
+        uploaded_file = st.file_uploader(
+            "Upload your Excel (.xlsx) from Groww",
+            type=["xlsx"],
+            help="Stocks Holdings Statement from Groww — always the same format"
+        )
+    with col_cap:
+        total_capital_port = st.number_input(
+            "Total Portfolio Capital (₹)",
+            min_value=10000, max_value=100000000,
+            value=1000000, step=10000, format="%d",
+            help="Your total capital including cash — for concentration % calculation"
+        )
+
+    # ── Watchlist ──────────────────────────────────────────
     watchlist_input = st.text_input(
-        "📋 Watchlist (tickers you're tracking but haven't bought)",
+        "📋 Watchlist — stocks you're tracking but haven't bought",
         "NLCINDIA, MAZDOCK, TITAN, BAJAJ-AUTO",
-        help="Comma-separated. Shows entry signals when conditions align."
+        help="Comma-separated NSE tickers"
     )
 
-    if st.button("🔍 Analyse Portfolio", type="primary", key="analyse_portfolio"):
-
-        holdings = parse_portfolio_input(portfolio_text)
+    if uploaded_file is not None:
+        # Parse the Excel
+        with st.spinner("Parsing your Groww holdings..."):
+            holdings, groww_summary, parse_skipped = parse_groww_excel(uploaded_file)
 
         if not holdings:
-            st.error("No valid holdings found. Use format: TICKER, SHARES, BUY_PRICE")
+            st.error("Could not extract any equity holdings. Check the file format.")
         else:
-            # ── Fetch and score all holdings ──────────────────────────
-            port_data = []
-            errors    = []
+            # Show what was parsed
+            st.success(f"✅ Found **{len(holdings)} equity positions** from your Groww statement")
 
-            prog = st.progress(0)
-            stat = st.empty()
+            if groww_summary:
+                gs1, gs2, gs3 = st.columns(3)
+                gs1.metric("Invested (Groww)", f"₹{groww_summary.get('invested',0):,.0f}")
+                gs2.metric("Current Value (Groww)", f"₹{groww_summary.get('value',0):,.0f}")
+                gs3.metric("Unrealised P&L (Groww)", f"₹{groww_summary.get('pnl',0):+,.0f}")
 
-            for i, h in enumerate(holdings):
-                ticker = h["ticker"]
-                stat.text(f"Analysing {ticker}...")
-                df = fetch_data(ticker)
+            if parse_skipped:
+                with st.expander(f"ℹ️ {len(parse_skipped)} items filtered/skipped"):
+                    for s in parse_skipped:
+                        st.write("•", s)
 
-                if df.empty or "Close" not in df.columns or len(df) < 252:
-                    errors.append(f"{ticker} — insufficient data")
-                    prog.progress((i+1)/len(holdings))
-                    continue
+            # Show parsed holdings table
+            with st.expander("📋 Parsed holdings (verify tickers before analysing)"):
+                preview_df = pd.DataFrame([{
+                    "NSE Ticker": h["ticker"],
+                    "Company":    h["name"],
+                    "Shares":     int(h["shares"]),
+                    "Avg Buy ₹":  h["buy_price"],
+                } for h in holdings])
+                st.dataframe(preview_df, use_container_width=True, hide_index=True)
+                st.caption("If any ticker looks wrong, let me know and I'll fix the mapping.")
 
-                try:
-                    metrics        = compute_metrics(df, benchmark_df)
-                    canslim_s, ct  = compute_canslim_score(df)
-                    _, mp, mpct    = compute_minervini_score(df)
-                    mom_data       = compute_momentum_score(df)
-                    risk_m         = compute_risk_metrics(df)
-                    master, mrec   = compute_master_score(
-                        metrics["Score"], ct, mpct,
-                        mom_data["MomentumScore"], 50, market_regime
-                    )
+            if st.button("🔍 Analyse Portfolio", type="primary", key="analyse_excel"):
 
-                    current_price = metrics["Price"]
-                    invested      = h["shares"] * h["buy_price"]
-                    current_val   = h["shares"] * current_price
-                    pnl_inr       = current_val - invested
-                    pnl_pct       = (current_price / h["buy_price"] - 1) * 100
+                port_data = []
+                errors    = []
+                prog = st.progress(0)
+                stat = st.empty()
 
-                    signal, sig_color, sig_reason = compute_action_signal(
-                        master, metrics, risk_m, pnl_pct, market_regime
-                    )
+                for i, h in enumerate(holdings):
+                    ticker = h["ticker"]
+                    stat.text(f"Analysing {ticker} ({h['name'][:30]})...")
+                    df = fetch_data(ticker)
 
-                    port_data.append({
-                        "Ticker":        ticker,
-                        "Sector":        get_sector(ticker),
-                        "Shares":        int(h["shares"]),
-                        "Buy ₹":         h["buy_price"],
-                        "Current ₹":     current_price,
-                        "Invested ₹":    round(invested, 0),
-                        "Value ₹":       round(current_val, 0),
-                        "P&L ₹":         round(pnl_inr, 0),
-                        "P&L %":         round(pnl_pct, 1),
-                        "Master Score":  master,
-                        "CANSLIM":       int(ct),
-                        "Minervini/8":   mp,
-                        "Signal":        signal,
-                        "Signal Reason": sig_reason,
-                        "RSI":           metrics["RSI"],
-                        "3M Mom%":       metrics["Momentum3M"],
-                        "Stop ₹":        risk_m["StopLoss"],
-                        "2R Target ₹":   risk_m["Target2R"],
-                        "Port %":        round(current_val / total_capital_port * 100, 1),
-                        "_metrics":      metrics,
-                        "_risk":         risk_m,
-                    })
-                except Exception as e:
-                    errors.append(f"{ticker} — {str(e)[:50]}")
-
-                prog.progress((i+1)/len(holdings))
-
-            prog.empty()
-            stat.empty()
-
-            if not port_data:
-                st.error("Could not analyse any holdings.")
-            else:
-                # ── Portfolio Summary ──────────────────────────────────
-                total_invested = sum(r["Invested ₹"] for r in port_data)
-                total_value    = sum(r["Value ₹"]    for r in port_data)
-                total_pnl      = total_value - total_invested
-                total_pnl_pct  = (total_value / total_invested - 1) * 100 if total_invested > 0 else 0
-                avg_score      = round(sum(r["Master Score"] for r in port_data) / len(port_data))
-
-                st.markdown("### 📊 Portfolio Summary")
-                s1,s2,s3,s4,s5 = st.columns(5)
-                s1.metric("Total Invested",  f"₹{total_invested:,.0f}")
-                s2.metric("Current Value",   f"₹{total_value:,.0f}")
-                s3.metric("Total P&L",       f"₹{total_pnl:+,.0f}", f"{total_pnl_pct:+.1f}%")
-                s4.metric("Avg Master Score",f"{avg_score}/100")
-                s5.metric("Positions",       f"{len(port_data)}")
-
-                # Regime warning
-                if market_regime == "Bear":
-                    st.warning("⚠️ Bear market regime active — Nifty below 200DMA. All scores downgraded 20%. Consider reducing overall exposure.")
-
-                # ── Action Signal Summary ──────────────────────────────
-                st.markdown("### 🎯 Action Signals")
-                exits  = [r for r in port_data if "EXIT"  in r["Signal"]]
-                trims  = [r for r in port_data if "TRIM"  in r["Signal"] or "WATCH" in r["Signal"]]
-                adds   = [r for r in port_data if "ADD"   in r["Signal"]]
-                holds  = [r for r in port_data if "HOLD"  in r["Signal"]]
-
-                ac1,ac2,ac3,ac4 = st.columns(4)
-                ac1.metric("🔴 Exit",  len(exits))
-                ac2.metric("🟠 Trim",  len(trims))
-                ac3.metric("🔵 Hold",  len(holds))
-                ac4.metric("🟢 Add",   len(adds))
-
-                if exits:
-                    st.error("**Exit signals:** " + ", ".join(r["Ticker"] for r in exits))
-                if trims:
-                    st.warning("**Trim/Watch signals:** " + ", ".join(r["Ticker"] for r in trims))
-                if adds:
-                    st.success("**Add signals:** " + ", ".join(r["Ticker"] for r in adds))
-
-                # ── Sector Breakdown ───────────────────────────────────
-                st.markdown("### 🏭 Sector Breakdown")
-                sectors = {}
-                for r in port_data:
-                    s = r["Sector"]
-                    if s not in sectors:
-                        sectors[s] = {"tickers":[], "invested":0, "value":0, "pnl":0}
-                    sectors[s]["tickers"].append(r["Ticker"])
-                    sectors[s]["invested"] += r["Invested ₹"]
-                    sectors[s]["value"]    += r["Value ₹"]
-                    sectors[s]["pnl"]      += r["P&L ₹"]
-
-                sector_rows = []
-                for s, d in sorted(sectors.items(), key=lambda x: -x[1]["value"]):
-                    pnl_pct_s = (d["value"]/d["invested"]-1)*100 if d["invested"]>0 else 0
-                    port_pct_s = d["value"]/total_capital_port*100
-                    sector_rows.append({
-                        "Sector":     s,
-                        "Stocks":     ", ".join(d["tickers"]),
-                        "Invested ₹": f"₹{d['invested']:,.0f}",
-                        "Value ₹":    f"₹{d['value']:,.0f}",
-                        "P&L ₹":      f"₹{d['pnl']:+,.0f}",
-                        "P&L %":      f"{pnl_pct_s:+.1f}%",
-                        "Port %":     f"{port_pct_s:.1f}%"
-                    })
-
-                st.dataframe(pd.DataFrame(sector_rows), use_container_width=True, hide_index=True)
-
-                # Concentration warning
-                for s, d in sectors.items():
-                    conc = d["value"] / total_capital_port * 100
-                    if conc > 30:
-                        st.warning(f"⚠️ Concentration risk: {s} is {conc:.0f}% of your total capital")
-
-                # ── Per-Position Detail ────────────────────────────────
-                st.markdown("### 📋 Position Detail")
-
-                # Group by sector
-                sector_order = sorted(set(r["Sector"] for r in port_data))
-                for sector in sector_order:
-                    sector_positions = [r for r in port_data if r["Sector"] == sector]
-                    if not sector_positions:
+                    if df.empty or "Close" not in df.columns or len(df) < 252:
+                        errors.append(f"{ticker} ({h['name'][:30]}) — insufficient data")
+                        prog.progress((i+1)/len(holdings))
                         continue
 
-                    st.markdown(f"#### 🏷️ {sector}")
+                    try:
+                        metrics       = compute_metrics(df, benchmark_df)
+                        canslim_s, ct = compute_canslim_score(df)
+                        _, mp, mpct   = compute_minervini_score(df)
+                        mom_data      = compute_momentum_score(df)
+                        risk_m        = compute_risk_metrics(df)
+                        master, mrec  = compute_master_score(
+                            metrics["Score"], ct, mpct,
+                            mom_data["MomentumScore"], 50, market_regime
+                        )
 
-                    for r in sector_positions:
-                        pnl_color = "🟢" if r["P&L %"] >= 0 else "🔴"
-                        with st.expander(
-                            f"{r['Ticker']}  ·  {r['Signal']}  ·  "
-                            f"{pnl_color} P&L: ₹{r['P&L ₹']:+,.0f} ({r['P&L %']:+.1f}%)  ·  "
-                            f"Score: {r['Master Score']}/100"
-                        ):
-                            col1, col2, col3 = st.columns(3)
+                        current_price = metrics["Price"]
+                        invested      = h["shares"] * h["buy_price"]
+                        current_val   = h["shares"] * current_price
+                        pnl_inr       = current_val - invested
+                        pnl_pct       = (current_price / h["buy_price"] - 1) * 100
 
-                            with col1:
-                                st.markdown("**Position**")
-                                st.markdown(f"""
-- Shares: {r['Shares']}
-- Buy price: ₹{r['Buy ₹']}
-- Current: ₹{r['Current ₹']}
-- Invested: ₹{r['Invested ₹']:,.0f}
-- Value: ₹{r['Value ₹']:,.0f}
-- P&L: ₹{r['P&L ₹']:+,.0f} ({r['P&L %']:+.1f}%)
-- Portfolio weight: {r['Port %']}%
+                        signal, sig_color, sig_reason = compute_action_signal(
+                            master, metrics, risk_m, pnl_pct, market_regime
+                        )
+
+                        port_data.append({
+                            "Ticker":       ticker,
+                            "Company":      h["name"],
+                            "Sector":       get_sector(ticker),
+                            "Shares":       int(h["shares"]),
+                            "Buy ₹":        h["buy_price"],
+                            "Current ₹":    current_price,
+                            "Invested ₹":   round(invested, 0),
+                            "Value ₹":      round(current_val, 0),
+                            "P&L ₹":        round(pnl_inr, 0),
+                            "P&L %":        round(pnl_pct, 1),
+                            "Master Score": master,
+                            "CANSLIM":      int(ct),
+                            "Minervini/8":  mp,
+                            "Signal":       signal,
+                            "Signal Reason":sig_reason,
+                            "RSI":          metrics["RSI"],
+                            "3M Mom%":      metrics["Momentum3M"],
+                            "Stop ₹":       risk_m["StopLoss"],
+                            "2R Target ₹":  risk_m["Target2R"],
+                            "Port %":       round(current_val / total_capital_port * 100, 1),
+                        })
+                    except Exception as e:
+                        errors.append(f"{ticker} — {str(e)[:50]}")
+
+                    prog.progress((i+1)/len(holdings))
+
+                prog.empty()
+                stat.empty()
+
+                if not port_data:
+                    st.error("Could not analyse any positions. Check ticker mappings.")
+                else:
+                    # ── Portfolio Summary ──────────────────────────────
+                    total_invested = sum(r["Invested ₹"] for r in port_data)
+                    total_value    = sum(r["Value ₹"]    for r in port_data)
+                    total_pnl      = total_value - total_invested
+                    total_pnl_pct  = (total_value / total_invested - 1) * 100 if total_invested > 0 else 0
+                    avg_score      = round(sum(r["Master Score"] for r in port_data) / len(port_data))
+
+                    st.markdown("### 📊 Portfolio Summary")
+                    s1,s2,s3,s4,s5 = st.columns(5)
+                    s1.metric("Total Invested",   f"₹{total_invested:,.0f}")
+                    s2.metric("Current Value",    f"₹{total_value:,.0f}")
+                    s3.metric("Total P&L",        f"₹{total_pnl:+,.0f}", f"{total_pnl_pct:+.1f}%")
+                    s4.metric("Avg Master Score", f"{avg_score}/100")
+                    s5.metric("Positions",        f"{len(port_data)}")
+
+                    if market_regime == "Bear":
+                        st.warning("⚠️ Bear market regime — Nifty below 200DMA. All scores downgraded. Consider reducing overall exposure.")
+
+                    # ── Action Signal Summary ──────────────────────────
+                    st.markdown("### 🎯 Action Signals")
+                    exits = [r for r in port_data if "EXIT"  in r["Signal"]]
+                    trims = [r for r in port_data if "TRIM"  in r["Signal"] or "WATCH" in r["Signal"]]
+                    adds  = [r for r in port_data if "ADD"   in r["Signal"]]
+                    holds = [r for r in port_data if "HOLD"  in r["Signal"]]
+
+                    ac1,ac2,ac3,ac4 = st.columns(4)
+                    ac1.metric("🔴 Exit",  len(exits))
+                    ac2.metric("🟠 Trim",  len(trims))
+                    ac3.metric("🔵 Hold",  len(holds))
+                    ac4.metric("🟢 Add",   len(adds))
+
+                    if exits:
+                        st.error("**Exit signals:** " + ", ".join(r["Ticker"] for r in exits))
+                    if trims:
+                        st.warning("**Trim/Watch:** " + ", ".join(r["Ticker"] for r in trims))
+                    if adds:
+                        st.success("**Add signals:** " + ", ".join(r["Ticker"] for r in adds))
+
+                    # ── Sector Breakdown ───────────────────────────────
+                    st.markdown("### 🏭 Sector Breakdown")
+                    sectors = {}
+                    for r in port_data:
+                        s = r["Sector"]
+                        if s not in sectors:
+                            sectors[s] = {"tickers":[], "invested":0, "value":0, "pnl":0}
+                        sectors[s]["tickers"].append(r["Ticker"])
+                        sectors[s]["invested"] += r["Invested ₹"]
+                        sectors[s]["value"]    += r["Value ₹"]
+                        sectors[s]["pnl"]      += r["P&L ₹"]
+
+                    sector_rows = []
+                    for s, d in sorted(sectors.items(), key=lambda x: -x[1]["value"]):
+                        pp = (d["value"]/d["invested"]-1)*100 if d["invested"]>0 else 0
+                        cp = d["value"]/total_capital_port*100
+                        sector_rows.append({
+                            "Sector":    s,
+                            "Stocks":    ", ".join(d["tickers"]),
+                            "Invested":  f"₹{d['invested']:,.0f}",
+                            "Value":     f"₹{d['value']:,.0f}",
+                            "P&L":       f"₹{d['pnl']:+,.0f}",
+                            "P&L %":     f"{pp:+.1f}%",
+                            "Port %":    f"{cp:.1f}%",
+                            "⚠️ Conc":   "⚠️ High" if cp > 30 else ("🟡 Med" if cp > 15 else "✅ OK")
+                        })
+                    st.dataframe(pd.DataFrame(sector_rows), use_container_width=True, hide_index=True)
+
+                    # ── P&L Chart ──────────────────────────────────────
+                    st.markdown("### 📊 P&L by Position")
+                    sorted_data = sorted(port_data, key=lambda x: x["P&L ₹"])
+                    fig_pnl = go.Figure(go.Bar(
+                        x=[r["Ticker"] for r in sorted_data],
+                        y=[r["P&L ₹"]  for r in sorted_data],
+                        marker_color=["#2ecc71" if r["P&L ₹"]>=0 else "#e74c3c" for r in sorted_data],
+                        text=[f"₹{r['P&L ₹']:+,.0f}\n({r['P&L %']:+.1f}%)" for r in sorted_data],
+                        textposition="outside"
+                    ))
+                    fig_pnl.update_layout(
+                        template="plotly_dark", height=340,
+                        margin=dict(l=0,r=0,t=10,b=0),
+                        yaxis_title="P&L (₹)", showlegend=False
+                    )
+                    st.plotly_chart(fig_pnl, use_container_width=True)
+
+                    # ── Per-Position Detail ────────────────────────────
+                    st.markdown("### 📋 Position Detail (by Sector)")
+                    for sector in sorted(set(r["Sector"] for r in port_data)):
+                        positions = [r for r in port_data if r["Sector"] == sector]
+                        if not positions:
+                            continue
+                        st.markdown(f"#### 🏷️ {sector}")
+                        for r in positions:
+                            icon = "🟢" if r["P&L %"] >= 0 else "🔴"
+                            with st.expander(
+                                f"{r['Ticker']}  ·  {r['Signal']}  ·  "
+                                f"{icon} {r['P&L %']:+.1f}%  (₹{r['P&L ₹']:+,.0f})  ·  "
+                                f"Score {r['Master Score']}/100"
+                            ):
+                                c1, c2, c3 = st.columns(3)
+                                with c1:
+                                    st.markdown("**Position**")
+                                    st.markdown(f"""
+- Company: {r["Company"]}
+- Shares: {r["Shares"]}
+- Buy price: ₹{r["Buy ₹"]}
+- Current: ₹{r["Current ₹"]}
+- Invested: ₹{r["Invested ₹"]:,.0f}
+- Value: ₹{r["Value ₹"]:,.0f}
+- P&L: ₹{r["P&L ₹"]:+,.0f} ({r["P&L %"]:+.1f}%)
+- Portfolio weight: {r["Port %"]}%
 """)
-
-                            with col2:
-                                st.markdown("**Framework Scores**")
-                                st.markdown(f"""
-- Master Score: **{r['Master Score']}/100**
-- CANSLIM: {r['CANSLIM']}/100
-- Minervini: {r['Minervini/8']}/8
-- RSI: {r['RSI']:.0f}
-- 3M Momentum: {r['3M Mom%']:+.1f}%
+                                with c2:
+                                    st.markdown("**Framework Scores**")
+                                    sc = r["Master Score"]
+                                    col = "#2ecc71" if sc>=65 else ("#f39c12" if sc>=45 else "#e74c3c")
+                                    st.markdown(f"""
+- Master Score: **{sc}/100**
+- CANSLIM: {r["CANSLIM"]}/100
+- Minervini: {r["Minervini/8"]}/8
+- RSI: {r["RSI"]:.0f}
+- 3M Momentum: {r["3M Mom%"]:+.1f}%
 """)
-                                # Score bar
-                                score_pct = r["Master Score"]
-                                color = "#2ecc71" if score_pct >= 65 else ("#f39c12" if score_pct >= 45 else "#e74c3c")
+                                    st.markdown(
+                                        f'<div style="background:#2e3250;border-radius:4px;height:10px;">'                                        f'<div style="background:{col};width:{sc}%;height:10px;border-radius:4px;"></div>'                                        f'</div><small>{sc}/100</small>',
+                                        unsafe_allow_html=True
+                                    )
+                                with c3:
+                                    st.markdown("**Risk Levels**")
+                                    vs_stop = "⛔ BELOW STOP" if r["Current ₹"] < r["Stop ₹"] else f"₹{r['Current ₹']-r['Stop ₹']:.0f} above"
+                                    vs_tgt  = "✅ TARGET HIT" if r["Current ₹"] >= r["2R Target ₹"] else f"₹{r['2R Target ₹']-r['Current ₹']:.0f} away"
+                                    st.markdown(f"""
+- Stop Loss: ₹{r["Stop ₹"]}
+- 2R Target: ₹{r["2R Target ₹"]}
+- vs Stop: {vs_stop}
+- vs 2R Target: {vs_tgt}
+""")
+                                sig_bg = {"EXIT":"#3b0d0d","TRIM":"#3b2a0d",
+                                           "WATCH":"#3b2a0d","HOLD":"#0d1b3b","ADD":"#0d3b1e"}
+                                sig_key = next((k for k in sig_bg if k in r["Signal"]), "HOLD")
                                 st.markdown(
-                                    f'<div style="background:#2e3250;border-radius:4px;height:10px;">'
-                                    f'<div style="background:{color};width:{score_pct}%;height:10px;border-radius:4px;"></div>'
-                                    f'</div><small>{score_pct}/100</small>',
+                                    f'<div style="background:{sig_bg[sig_key]};padding:10px 14px;'                                    f'border-radius:8px;margin-top:8px;">'                                    f'<strong>{r["Signal"]}</strong> — {r["Signal Reason"]}'                                    f'</div>',
                                     unsafe_allow_html=True
                                 )
 
-                            with col3:
-                                st.markdown("**Risk Levels**")
-                                st.markdown(f"""
-- Stop Loss: ₹{r['Stop ₹']}
-- 2R Target: ₹{r['2R Target ₹']}
-- vs Stop: {"⛔ BELOW STOP" if r['Current ₹'] < r['Stop ₹'] else f"₹{r['Current ₹'] - r['Stop ₹']:.0f} above stop"}
-- vs 2R: {"✅ TARGET HIT" if r['Current ₹'] >= r['2R Target ₹'] else f"₹{r['2R Target ₹'] - r['Current ₹']:.0f} to target"}
+                    if errors:
+                        with st.expander(f"⚠️ {len(errors)} position(s) could not be analysed"):
+                            for e in errors:
+                                st.write("•", e)
+
+    else:
+        st.info("👆 Upload your Groww Stocks Holdings Statement Excel file to get started.")
+        st.markdown("""
+**What this tab does once you upload:**
+- Auto-reads all your equity holdings, quantities, and average buy prices
+- Filters out mutual funds, ETFs, and gold bonds automatically
+- Runs all 4 frameworks (CANSLIM, Minervini, Momentum, Master Score) on each position
+- Shows P&L by position and by sector
+- Gives Hold / Add / Trim / Exit signals with specific reasons
+- Flags sector concentration risks
 """)
 
-                            # Action signal box
-                            sig_bg = {"EXIT":"#3b0d0d","TRIM":"#3b2a0d",
-                                       "WATCH":"#3b2a0d","HOLD":"#0d1b3b","ADD":"#0d3b1e"}
-                            sig_key = next((k for k in sig_bg if k in r["Signal"]), "HOLD")
-                            st.markdown(
-                                f'<div style="background:{sig_bg[sig_key]};padding:10px 14px;'
-                                f'border-radius:8px;margin-top:8px;">'
-                                f'<strong>{r["Signal"]}</strong> — {r["Signal Reason"]}'
-                                f'</div>',
-                                unsafe_allow_html=True
-                            )
+    # ── WATCHLIST ──────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 📋 Watchlist — Entry Signal Tracker")
+    st.caption("Stocks you're tracking but haven't bought yet")
 
-                if errors:
-                    with st.expander(f"⚠️ {len(errors)} ticker(s) could not be analysed"):
-                        for e in errors:
-                            st.write("•", e)
+    watch_tickers = [t.strip() for t in watchlist_input.split(",") if t.strip()]
 
-                # ── P&L Waterfall Chart ────────────────────────────────
-                st.markdown("### 📊 P&L by Position")
-                colors_bar = ["#2ecc71" if r["P&L ₹"] >= 0 else "#e74c3c" for r in port_data]
-                fig_pnl = go.Figure(go.Bar(
-                    x=[r["Ticker"] for r in port_data],
-                    y=[r["P&L ₹"] for r in port_data],
-                    marker_color=colors_bar,
-                    text=[f"₹{r['P&L ₹']:+,.0f}\n({r['P&L %']:+.1f}%)" for r in port_data],
-                    textposition="outside"
-                ))
-                fig_pnl.update_layout(
-                    template="plotly_dark", height=320,
-                    margin=dict(l=0,r=0,t=20,b=0),
-                    yaxis_title="P&L (₹)", showlegend=False
-                )
-                st.plotly_chart(fig_pnl, use_container_width=True)
+    if watch_tickers and st.button("🔍 Check Watchlist", key="check_watchlist"):
+        watch_rows  = []
+        watch_prog  = st.progress(0)
 
-        # ── WATCHLIST ──────────────────────────────────────────────────
-        st.markdown("---")
-        st.markdown("### 📋 Watchlist — Entry Signal Tracker")
-        st.caption("Stocks you're tracking but haven't bought yet")
-
-        watch_tickers = [t.strip() for t in watchlist_input.split(",") if t.strip()]
-
-        if watch_tickers and st.button("🔍 Check Watchlist", key="check_watchlist"):
-            watch_rows = []
-            watch_prog = st.progress(0)
-
-            for i, ticker in enumerate(watch_tickers):
-                df = fetch_data(ticker)
-                if df.empty or len(df) < 252:
-                    watch_rows.append({
-                        "Ticker": ticker, "Entry Signal": "❓ No Data",
-                        "Master Score": "-", "Minervini/8": "-",
-                        "Price ₹": "-", "RSI": "-", "3M Mom%": "-", "Reason": "Insufficient data"
-                    })
-                    watch_prog.progress((i+1)/len(watch_tickers))
-                    continue
-
-                try:
-                    metrics       = compute_metrics(df, benchmark_df)
-                    canslim_s, ct = compute_canslim_score(df)
-                    _, mp, mpct   = compute_minervini_score(df)
-                    mom_data      = compute_momentum_score(df)
-                    risk_m        = compute_risk_metrics(df)
-                    master, _     = compute_master_score(
-                        metrics["Score"], ct, mpct,
-                        mom_data["MomentumScore"], 50, market_regime
-                    )
-
-                    # Entry signal logic
-                    if master >= 70 and mp >= 6 and metrics["RSI"] < 70 and metrics["Momentum3M"] > 0:
-                        entry = "🟢 Strong Entry"
-                        reason = f"Score {master}, {mp}/8 Minervini, RSI {metrics['RSI']:.0f} — conditions aligned"
-                    elif master >= 55 and metrics["Price"] > metrics["SMA200"] and metrics["Momentum3M"] > 0:
-                        entry = "🟡 Watch Closely"
-                        reason = f"Score {master} — setup developing but not fully confirmed"
-                    elif metrics["RSI"] < 40 and master >= 45:
-                        entry = "🟡 Oversold — Wait"
-                        reason = "Potentially oversold — wait for RSI recovery above 45 before entering"
-                    else:
-                        entry = "⏳ Not Ready"
-                        reason = f"Score {master}, {mp}/8 Minervini — conditions not aligned yet"
-
-                    watch_rows.append({
-                        "Ticker":       ticker,
-                        "Entry Signal": entry,
-                        "Master Score": master,
-                        "Minervini/8":  mp,
-                        "Price ₹":      f"₹{metrics['Price']}",
-                        "RSI":          round(metrics["RSI"], 1),
-                        "3M Mom%":      f"{metrics['Momentum3M']:+.1f}%",
-                        "Reason":       reason
-                    })
-                except Exception as e:
-                    watch_rows.append({
-                        "Ticker": ticker, "Entry Signal": "❌ Error",
-                        "Master Score": "-", "Minervini/8": "-",
-                        "Price ₹": "-", "RSI": "-", "3M Mom%": "-",
-                        "Reason": str(e)[:60]
-                    })
-
+        for i, ticker in enumerate(watch_tickers):
+            df = fetch_data(ticker)
+            if df.empty or len(df) < 252:
+                watch_rows.append({
+                    "Ticker": ticker,
+                    "Entry Signal": "❓ No Data",
+                    "Master Score": "-", "Minervini/8": "-",
+                    "Price ₹": "-", "RSI": "-", "3M Mom%": "-",
+                    "Reason": "Insufficient data"
+                })
                 watch_prog.progress((i+1)/len(watch_tickers))
-
-            watch_prog.empty()
-
-            if watch_rows:
-                st.dataframe(
-                    pd.DataFrame(watch_rows),
-                    use_container_width=True,
-                    hide_index=True
+                continue
+            try:
+                metrics       = compute_metrics(df, benchmark_df)
+                canslim_s, ct = compute_canslim_score(df)
+                _, mp, mpct   = compute_minervini_score(df)
+                mom_data      = compute_momentum_score(df)
+                risk_m        = compute_risk_metrics(df)
+                master, _     = compute_master_score(
+                    metrics["Score"], ct, mpct,
+                    mom_data["MomentumScore"], 50, market_regime
                 )
+                if master>=70 and mp>=6 and metrics["RSI"]<70 and metrics["Momentum3M"]>0:
+                    entry  = "🟢 Strong Entry"
+                    reason = f"Score {master}, {mp}/8 Minervini, RSI {metrics['RSI']:.0f} — all conditions aligned"
+                elif master>=55 and metrics["Price"]>metrics["SMA200"] and metrics["Momentum3M"]>0:
+                    entry  = "🟡 Watch Closely"
+                    reason = f"Score {master} — setup developing, not fully confirmed"
+                elif metrics["RSI"]<40 and master>=45:
+                    entry  = "🟡 Oversold — Wait"
+                    reason = "Potentially oversold — wait for RSI recovery above 45"
+                else:
+                    entry  = "⏳ Not Ready"
+                    reason = f"Score {master}, {mp}/8 Minervini — conditions not aligned yet"
+
+                watch_rows.append({
+                    "Ticker":       ticker,
+                    "Entry Signal": entry,
+                    "Master Score": master,
+                    "Minervini/8":  mp,
+                    "Price ₹":      f"₹{metrics['Price']}",
+                    "RSI":          round(metrics["RSI"],1),
+                    "3M Mom%":      f"{metrics['Momentum3M']:+.1f}%",
+                    "Reason":       reason
+                })
+            except Exception as e:
+                watch_rows.append({
+                    "Ticker":ticker,"Entry Signal":"❌ Error",
+                    "Master Score":"-","Minervini/8":"-",
+                    "Price ₹":"-","RSI":"-","3M Mom%":"-","Reason":str(e)[:60]
+                })
+            watch_prog.progress((i+1)/len(watch_tickers))
+
+        watch_prog.empty()
+        if watch_rows:
+            st.dataframe(pd.DataFrame(watch_rows), use_container_width=True, hide_index=True)
