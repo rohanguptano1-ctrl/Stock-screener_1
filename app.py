@@ -1202,10 +1202,19 @@ def parse_groww_excel(file) -> tuple:
       Row 11+: Data rows
     Equity ISINs start with INE. Non-equity filtered out.
     """
-    try:
-        df = pd.read_excel(file, sheet_name="Sheet1", header=None)
-    except Exception as e:
-        return [], {}, [f"Could not read file: {e}"]
+    # Try sheet by name first, then by index — handles edge cases on cloud
+    df = None
+    read_error = None
+    for sheet in ["Sheet1", 0]:
+        try:
+            df = pd.read_excel(file, sheet_name=sheet, header=None, engine="openpyxl")
+            if df is not None and not df.empty:
+                break
+        except Exception as e:
+            read_error = str(e)
+            continue
+    if df is None or df.empty:
+        return [], {}, [f"Could not read Excel file: {read_error}"]
 
     # Scan for summary values by label (robust to row shifts)
     summary = {}
@@ -1356,7 +1365,12 @@ Upload that file below — no manual entry needed.
             holdings, groww_summary, parse_skipped = parse_groww_excel(uploaded_file)
 
         if not holdings:
-            st.error("Could not extract any equity holdings. Check the file format.")
+            if parse_skipped:
+                st.error("Could not extract equity holdings. Details:")
+                for s in parse_skipped:
+                    st.write("•", s)
+            else:
+                st.error("Could not extract any equity holdings. The file may be empty or in an unexpected format.")
         else:
             # Set total capital from Excel + new investment
             portfolio_current_value = groww_summary.get("value", 0)
