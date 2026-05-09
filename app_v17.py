@@ -53,11 +53,26 @@ def fetch_data(ticker, period="5y"):
     )
     if df.empty:
         return pd.DataFrame()
+
+    # Flatten MultiIndex columns (yfinance v0.2+ returns MultiIndex for single tickers too)
     if isinstance(df.columns, pd.MultiIndex):
+        # Level 0 = price type (Close/Open/...), Level 1 = ticker symbol
         df.columns = df.columns.get_level_values(0)
+
+    # Normalize column names — yfinance sometimes returns lowercase
+    df.columns = [c.strip().title() for c in df.columns]
+
+    # After .title(), "Volume" stays "Volume", "Close" stays "Close", etc.
+    # But "Adj Close" becomes "Adj Close" — map it to "Close" if Close is missing
+    if "Close" not in df.columns and "Adj Close" in df.columns:
+        df.rename(columns={"Adj Close": "Close"}, inplace=True)
+
     needed = [c for c in ["Close", "Open", "High", "Low", "Volume"] if c in df.columns]
+    if not needed or "Close" not in needed:
+        return pd.DataFrame()
+
     df = df[needed].copy()
-    df.dropna(inplace=True)
+    df.dropna(subset=["Close"], inplace=True)
     return df
 
 
@@ -408,6 +423,10 @@ Be direct, specific, and avoid generic filler. Use ₹ for prices. Write for a s
 
 benchmark_df = fetch_data("^NSEI")
 
+if benchmark_df.empty or "Close" not in benchmark_df.columns:
+    st.error("❌ Could not fetch Nifty 50 benchmark data (^NSEI). Check your internet connection or try again.")
+    st.stop()
+
 # =========================================================
 # SCREENER
 # =========================================================
@@ -427,7 +446,7 @@ if st.button("Run Screener"):
     for i, ticker in enumerate(tickers):
         try:
             df = fetch_data(ticker)
-            if len(df) < 250:
+            if df.empty or "Close" not in df.columns or len(df) < 250:
                 continue
             metrics = compute_metrics(df, benchmark_df)
             canslim_scores, canslim_total = compute_canslim_score(df)
@@ -495,7 +514,7 @@ if st.button("Run Portfolio Backtest"):
     for ticker in tickers:
         try:
             df = fetch_data(ticker, period=f"{years}y")
-            if len(df) < 250:
+            if df.empty or "Close" not in df.columns or len(df) < 250:
                 continue
             selected_tickers.append(ticker)
             returns = df["Close"].pct_change().fillna(0)
