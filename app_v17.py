@@ -26,14 +26,29 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🚀 AI Equity Research Platform V17")
-st.caption("Score-driven probabilities · CANSLIM scoring · Smart research notes · Risk management layer")
+st.caption("Score-driven probabilities · CANSLIM scoring · Smart research notes · Risk management layer · Just type RELIANCE, TCS — no .NS needed")
 
 # =========================================================
 # DATA FETCH
 # =========================================================
 
+def normalize_ticker(ticker):
+    """
+    Let users type RELIANCE, TCS, INFY etc.
+    Auto-appends .NS for NSE if no exchange suffix present.
+    Handles: RELIANCE -> RELIANCE.NS
+             RELIANCE.NS -> RELIANCE.NS (unchanged)
+             RELIANCE.BO -> RELIANCE.BO (unchanged)
+    """
+    ticker = ticker.strip().upper()
+    if "." not in ticker:
+        ticker = ticker + ".NS"
+    return ticker
+
+
 @st.cache_data(ttl=3600)
 def fetch_data(ticker, period="5y"):
+    ticker = normalize_ticker(ticker)
     df = yf.download(ticker, period=period, auto_adjust=True, progress=False)
     if df.empty:
         return pd.DataFrame()
@@ -338,13 +353,38 @@ def generate_research_note(ticker, metrics, canslim_scores, canslim_total, risk_
 
 
 # =========================================================
-# BENCHMARK
+# BENCHMARK — robust fetch with fallbacks
 # =========================================================
 
-benchmark_df = fetch_data("^NSEI")
+@st.cache_data(ttl=3600)
+def fetch_benchmark():
+    """
+    Try multiple ticker variants — yfinance is inconsistent
+    with index tickers on Streamlit Cloud.
+    """
+    for ticker in ["^NSEI", "^NSEI.NS", "NIFTYBEES.NS"]:
+        try:
+            df = yf.download(ticker, period="5y", auto_adjust=True, progress=False)
+            if df.empty:
+                continue
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            df.columns = [c.strip().title() for c in df.columns]
+            if "Close" not in df.columns and "Adj Close" in df.columns:
+                df.rename(columns={"Adj Close": "Close"}, inplace=True)
+            if "Close" in df.columns and len(df) > 100:
+                return df[["Close"]].dropna()
+        except Exception:
+            continue
+    return pd.DataFrame()
+
+benchmark_df = fetch_benchmark()
 
 if benchmark_df.empty or "Close" not in benchmark_df.columns:
-    st.error("❌ Could not fetch Nifty 50 benchmark data (^NSEI). Check your internet connection and try again.")
+    st.error(
+        "❌ Could not fetch benchmark data. This is a temporary Yahoo Finance issue — "
+        "please wait 1 minute and reload the page."
+    )
     st.stop()
 
 # =========================================================
@@ -355,7 +395,7 @@ st.header("📊 Screener")
 
 ticker_input = st.text_input(
     "Enter Tickers (comma-separated)",
-    "RELIANCE.NS,TCS.NS,INFY.NS,HDFCBANK.NS,ICICIBANK.NS"
+    "RELIANCE,TCS,INFY,HDFCBANK,ICICIBANK"
 )
 
 if st.button("Run Screener"):
@@ -405,7 +445,7 @@ st.header("📈 Portfolio Backtest")
 
 portfolio_input = st.text_input(
     "Portfolio Tickers",
-    "RELIANCE.NS,TCS.NS,INFY.NS,HDFCBANK.NS,ICICIBANK.NS"
+    "RELIANCE,TCS,INFY,HDFCBANK,ICICIBANK"
 )
 
 col_years, col_capital = st.columns(2)
@@ -506,7 +546,7 @@ st.header("🔎 Single Stock Deep Dive")
 
 col_t, col_c = st.columns([2, 1])
 with col_t:
-    single_ticker = st.text_input("Ticker", "RELIANCE.NS")
+    single_ticker = st.text_input("Ticker", "RELIANCE")
 with col_c:
     analysis_capital = st.number_input("Capital for Sizing (₹)", min_value=10000,
                                         max_value=10000000, value=500000, step=10000, format="%d")
