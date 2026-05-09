@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
-from scipy.stats import linregress
 
 st.set_page_config(
     page_title="BharatTrack V17",
@@ -13,10 +12,10 @@ st.set_page_config(
 st.title("🚀 BharatTrack — AI Equity Research Platform V17")
 
 # =========================================================
-# HELPERS
+# DATA FETCH
 # =========================================================
 
-
+@st.cache_data
 def fetch_data(ticker, period="5y"):
     df = yf.download(ticker, period=period, auto_adjust=True)
 
@@ -24,47 +23,66 @@ def fetch_data(ticker, period="5y"):
         df.columns = df.columns.get_level_values(0)
 
     df = df.dropna()
+
     return df
 
 
 benchmark_df = fetch_data("^NSEI")
 
-
 # =========================================================
 # METRICS ENGINE
 # =========================================================
 
-
 def compute_metrics(df, benchmark_df=None):
-    close = df["Close"]
 
-    sma50 = close.rolling(50).mean().iloc[-1]
-    sma200 = close.rolling(200).mean().iloc[-1]
+    close = pd.Series(df["Close"]).dropna()
+
+    sma50_series = close.rolling(50).mean()
+    sma200_series = close.rolling(200).mean()
+
+    sma50 = float(sma50_series.iloc[-1])
+    sma200 = float(sma200_series.iloc[-1])
 
     delta = close.diff()
 
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
 
     avg_gain = gain.rolling(14).mean()
     avg_loss = loss.rolling(14).mean()
 
     rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
+    rsi_series = 100 - (100 / (1 + rs))
 
-    momentum = ((close.iloc[-1] / close.iloc[-63]) - 1) * 100
+    rsi = float(rsi_series.iloc[-1])
 
-    volatility = close.pct_change().std() * np.sqrt(252) * 100
+    momentum = float(
+        ((close.iloc[-1] / close.iloc[-63]) - 1) * 100
+    )
+
+    volatility = float(
+        close.pct_change().std() * np.sqrt(252) * 100
+    )
 
     relative_strength = 0
 
     if benchmark_df is not None:
-        benchmark_close = benchmark_df["Close"]
 
-        stock_return = close.iloc[-1] / close.iloc[0]
-        benchmark_return = benchmark_close.iloc[-1] / benchmark_close.iloc[0]
+        benchmark_close = pd.Series(
+            benchmark_df["Close"]
+        ).dropna()
 
-        relative_strength = ((stock_return / benchmark_return) - 1) * 100
+        stock_return = float(
+            close.iloc[-1] / close.iloc[0]
+        )
+
+        benchmark_return = float(
+            benchmark_close.iloc[-1] / benchmark_close.iloc[0]
+        )
+
+        relative_strength = (
+            (stock_return / benchmark_return) - 1
+        ) * 100
 
     score = 0
 
@@ -74,7 +92,7 @@ def compute_metrics(df, benchmark_df=None):
     if sma50 > sma200:
         score += 20
 
-    if rsi.iloc[-1] > 55:
+    if rsi > 55:
         score += 20
 
     if momentum > 0:
@@ -100,8 +118,8 @@ def compute_metrics(df, benchmark_df=None):
         structure = "Bearish Structure"
 
     return {
-        "Price": round(close.iloc[-1], 2),
-        "RSI": round(rsi.iloc[-1], 2),
+        "Price": round(float(close.iloc[-1]), 2),
+        "RSI": round(rsi, 2),
         "Momentum": round(momentum, 2),
         "RelativeStrength": round(relative_strength, 2),
         "Volatility": round(volatility, 2),
@@ -109,34 +127,33 @@ def compute_metrics(df, benchmark_df=None):
         "SMA200": round(sma200, 2),
         "Score": score,
         "Recommendation": recommendation,
-        "Structure": structure,
+        "Structure": structure
     }
 
-
 # =========================================================
-# CHART PATTERN ANALYSIS
+# CHART ANALYSIS
 # =========================================================
-
 
 def chart_analysis(metrics):
+
     analysis = []
 
     if metrics["SMA50"] > metrics["SMA200"]:
         analysis.append(
-            "🟢 SMA50 remains above SMA200, indicating strong intermediate trend strength."
+            "🟢 SMA50 remains above SMA200, indicating bullish trend strength."
         )
     else:
         analysis.append(
-            "🔴 SMA50 remains below SMA200, indicating weaker recent momentum versus long-term trend."
+            "🔴 SMA50 remains below SMA200, indicating weaker recent momentum."
         )
 
     if metrics["Momentum"] > 0:
         analysis.append(
-            "🟢 Momentum remains positive, suggesting accumulation behavior."
+            "🟢 Positive momentum suggests accumulation behavior."
         )
     else:
         analysis.append(
-            "⚠️ Momentum remains weak, indicating possible corrective consolidation."
+            "⚠️ Negative momentum suggests corrective consolidation."
         )
 
     if metrics["RSI"] > 70:
@@ -154,13 +171,12 @@ def chart_analysis(metrics):
 
     return analysis
 
-
 # =========================================================
-# AI STYLE WRITEUP (RULE BASED)
+# WRITEUP ENGINE
 # =========================================================
 
+def generate_writeup(metrics):
 
-def generate_writeup(ticker, metrics):
     bullish = []
     risks = []
 
@@ -202,7 +218,6 @@ def generate_writeup(ticker, metrics):
 
     return bullish, risks
 
-
 # =========================================================
 # SCREENER
 # =========================================================
@@ -221,8 +236,14 @@ if st.button("Run Screener"):
     screener_results = []
 
     for ticker in tickers:
+
         try:
+
             df = fetch_data(ticker)
+
+            if df.empty:
+                continue
+
             metrics = compute_metrics(df, benchmark_df)
 
             screener_results.append({
@@ -242,9 +263,16 @@ if st.button("Run Screener"):
     screener_df = pd.DataFrame(screener_results)
 
     if not screener_df.empty:
-        screener_df = screener_df.sort_values(by="Score", ascending=False)
-        st.dataframe(screener_df, use_container_width=True)
 
+        screener_df = screener_df.sort_values(
+            by="Score",
+            ascending=False
+        )
+
+        st.dataframe(
+            screener_df,
+            use_container_width=True
+        )
 
 # =========================================================
 # PORTFOLIO BACKTEST
@@ -268,33 +296,67 @@ if st.button("Run Portfolio Backtest"):
 
     tickers = [x.strip() for x in portfolio_input.split(",")]
 
-    portfolio_returns = []
+    returns_list = []
     valid_tickers = []
 
     for ticker in tickers:
+
         try:
-            df = fetch_data(ticker, period=f"{backtest_years}y")
 
-            returns = df["Close"].pct_change().dropna()
+            df = fetch_data(
+                ticker,
+                period=f"{backtest_years}y"
+            )
 
-            portfolio_returns.append(returns)
+            if df.empty:
+                continue
+
+            returns = pd.Series(
+                df["Close"]
+            ).pct_change().dropna()
+
+            returns.name = ticker
+
+            returns_list.append(returns)
+
             valid_tickers.append(ticker)
 
         except Exception as e:
             st.warning(f"Error loading {ticker}: {e}")
 
-    if len(portfolio_returns) > 0:
+    if len(returns_list) > 0:
 
-        combined_returns = pd.concat(portfolio_returns, axis=1)
-        combined_returns.columns = valid_tickers
+        combined_returns = pd.concat(
+            returns_list,
+            axis=1
+        ).dropna()
 
         strategy_returns = combined_returns.mean(axis=1)
 
-        benchmark = fetch_data("^NSEI", period=f"{backtest_years}y")
-        benchmark_returns = benchmark["Close"].pct_change().dropna()
+        benchmark = fetch_data(
+            "^NSEI",
+            period=f"{backtest_years}y"
+        )
 
-        strategy_curve = (1 + strategy_returns).cumprod()
-        benchmark_curve = (1 + benchmark_returns).cumprod()
+        benchmark_returns = pd.Series(
+            benchmark["Close"]
+        ).pct_change().dropna()
+
+        benchmark_returns = benchmark_returns.reindex(
+            strategy_returns.index
+        ).dropna()
+
+        strategy_returns = strategy_returns.reindex(
+            benchmark_returns.index
+        )
+
+        strategy_curve = (
+            1 + strategy_returns
+        ).cumprod()
+
+        benchmark_curve = (
+            1 + benchmark_returns
+        ).cumprod()
 
         fig = go.Figure()
 
@@ -312,41 +374,80 @@ if st.button("Run Portfolio Backtest"):
             name="Benchmark"
         ))
 
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
 
-        strategy_total_return = (strategy_curve.iloc[-1] - 1) * 100
-        benchmark_total_return = (benchmark_curve.iloc[-1] - 1) * 100
+        strategy_return = (
+            strategy_curve.iloc[-1] - 1
+        ) * 100
+
+        benchmark_return = (
+            benchmark_curve.iloc[-1] - 1
+        ) * 100
 
         sharpe = (
             strategy_returns.mean() /
             strategy_returns.std()
         ) * np.sqrt(252)
 
-        downside = strategy_returns[strategy_returns < 0]
+        downside = strategy_returns[
+            strategy_returns < 0
+        ]
 
-        sortino = (
-            strategy_returns.mean() /
-            downside.std()
-        ) * np.sqrt(252)
+        if downside.std() != 0:
+            sortino = (
+                strategy_returns.mean() /
+                downside.std()
+            ) * np.sqrt(252)
+        else:
+            sortino = 0
 
         rolling_max = strategy_curve.cummax()
-        drawdown = strategy_curve / rolling_max - 1
+
+        drawdown = (
+            strategy_curve / rolling_max
+        ) - 1
+
         max_drawdown = drawdown.min() * 100
 
         cagr = (
-            strategy_curve.iloc[-1] ** (1 / backtest_years) - 1
+            strategy_curve.iloc[-1] **
+            (1 / backtest_years) - 1
         ) * 100
 
         c1, c2, c3 = st.columns(3)
 
-        c1.metric("Strategy Return", f"{strategy_total_return:.2f}%")
-        c1.metric("CAGR", f"{cagr:.2f}%")
+        c1.metric(
+            "Strategy Return",
+            f"{strategy_return:.2f}%"
+        )
 
-        c2.metric("Benchmark Return", f"{benchmark_total_return:.2f}%")
-        c2.metric("Max Drawdown", f"{max_drawdown:.2f}%")
+        c1.metric(
+            "CAGR",
+            f"{cagr:.2f}%"
+        )
 
-        c3.metric("Sharpe Ratio", f"{sharpe:.2f}")
-        c3.metric("Sortino Ratio", f"{sortino:.2f}")
+        c2.metric(
+            "Benchmark Return",
+            f"{benchmark_return:.2f}%"
+        )
+
+        c2.metric(
+            "Max Drawdown",
+            f"{max_drawdown:.2f}%"
+        )
+
+        c3.metric(
+            "Sharpe Ratio",
+            f"{sharpe:.2f}"
+        )
+
+        c3.metric(
+            "Sortino Ratio",
+            f"{sortino:.2f}"
+        )
 
         st.subheader("Selected Portfolio")
 
@@ -354,11 +455,14 @@ if st.button("Run Portfolio Backtest"):
             "Ticker": valid_tickers
         })
 
-        st.dataframe(portfolio_df, use_container_width=True)
+        st.dataframe(
+            portfolio_df,
+            use_container_width=True
+        )
 
         st.subheader("🧠 Portfolio Interpretation")
 
-        if strategy_total_return > benchmark_total_return:
+        if strategy_return > benchmark_return:
             st.success(
                 "The strategy outperformed the benchmark over the selected period."
             )
@@ -368,10 +472,13 @@ if st.button("Run Portfolio Backtest"):
             )
 
         if sharpe > 1:
-            st.success("Risk-adjusted returns appear strong.")
+            st.success(
+                "Risk-adjusted returns appear strong."
+            )
         else:
-            st.info("Risk-adjusted returns appear moderate.")
-
+            st.info(
+                "Risk-adjusted returns appear moderate."
+            )
 
 # =========================================================
 # SINGLE STOCK ANALYSIS
@@ -387,9 +494,13 @@ single_ticker = st.text_input(
 if st.button("Analyze Stock"):
 
     try:
+
         df = fetch_data(single_ticker)
 
-        metrics = compute_metrics(df, benchmark_df)
+        metrics = compute_metrics(
+            df,
+            benchmark_df
+        )
 
         st.subheader(
             f"Recommendation: {metrics['Recommendation']}"
@@ -399,10 +510,16 @@ if st.button("Analyze Stock"):
 
         c1.metric("RSI", metrics["RSI"])
         c2.metric("Momentum %", metrics["Momentum"])
-        c3.metric("Relative Strength %", metrics["RelativeStrength"])
-        c4.metric("Volatility %", metrics["Volatility"])
+        c3.metric(
+            "Relative Strength %",
+            metrics["RelativeStrength"]
+        )
+        c4.metric(
+            "Volatility %",
+            metrics["Volatility"]
+        )
 
-        close = df["Close"]
+        close = pd.Series(df["Close"])
 
         sma50 = close.rolling(50).mean()
         sma200 = close.rolling(200).mean()
@@ -431,7 +548,11 @@ if st.button("Analyze Stock"):
         ))
 
         st.subheader("📉 Price Chart")
-        st.plotly_chart(fig, use_container_width=True)
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True
+        )
 
         st.subheader("📊 Chart Pattern Analysis")
 
@@ -440,7 +561,7 @@ if st.button("Analyze Stock"):
         for point in chart_points:
             st.write(f"• {point}")
 
-        bullish, risks = generate_writeup(single_ticker, metrics)
+        bullish, risks = generate_writeup(metrics)
 
         st.subheader("🧠 AI Investment Writeup")
 
@@ -473,7 +594,10 @@ if st.button("Analyze Stock"):
             ]
         })
 
-        st.dataframe(probability_df, use_container_width=True)
+        st.dataframe(
+            probability_df,
+            use_container_width=True
+        )
 
         st.subheader("👀 What To Watch Next")
 
@@ -494,5 +618,3 @@ if st.button("Analyze Stock"):
 
     except Exception as e:
         st.error(f"Analysis failed: {e}")
-
-```
