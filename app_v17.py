@@ -94,6 +94,53 @@ BASKETS = {
     "Custom": []
 }
 
+
+# =========================================================
+# SECTOR MAP
+# =========================================================
+
+SECTOR_MAP = {
+    # Banking
+    "HDFCBANK":"Banking","ICICIBANK":"Banking","KOTAKBANK":"Banking",
+    "SBIN":"Banking","AXISBANK":"Banking","INDUSINDBK":"Banking",
+    "BANDHANBNK":"Banking","FEDERALBNK":"Banking","PNB":"Banking",
+    "AUBANK":"Banking","BANKBARODA":"Banking","IDFCFIRSTB":"Banking",
+    # NBFC / Insurance / Finance
+    "BAJFINANCE":"NBFC","BAJAJFINSV":"NBFC","SHRIRAMFIN":"NBFC",
+    "JIOFIN":"NBFC","SBILIFE":"Insurance","HDFCLIFE":"Insurance",
+    # IT
+    "TCS":"IT","INFY":"IT","HCLTECH":"IT","WIPRO":"IT","TECHM":"IT",
+    "LTIM":"IT","MPHASIS":"IT","COFORGE":"IT","PERSISTENT":"IT","OFSS":"IT",
+    # Oil & Gas / Energy
+    "RELIANCE":"Oil & Gas","ONGC":"Oil & Gas","BPCL":"Oil & Gas",
+    "NTPC":"Power","POWERGRID":"Power","COALINDIA":"Mining","NLCINDIA":"Power",
+    # Metals
+    "TATASTEEL":"Metals","JSWSTEEL":"Metals","HINDALCO":"Metals","NATIONALUM":"Metals",
+    # Auto
+    "MARUTI":"Auto","TATAMOTORS":"Auto","M&M":"Auto",
+    "BAJAJ-AUTO":"Auto","HEROMOTOCO":"Auto","EICHERMOT":"Auto",
+    # Pharma / Healthcare
+    "SUNPHARMA":"Pharma","DRREDDY":"Pharma","CIPLA":"Pharma",
+    "DIVISLAB":"Pharma","APOLLOHOSP":"Healthcare",
+    # FMCG
+    "HINDUNILVR":"FMCG","ITC":"FMCG","NESTLEIND":"FMCG",
+    "BRITANNIA":"FMCG","TATACONSUM":"FMCG",
+    # Cement / Infra
+    "ULTRACEMCO":"Cement","GRASIM":"Cement","LT":"Infrastructure",
+    # Consumer / Retail
+    "TITAN":"Consumer","TRENT":"Retail","ASIANPAINT":"Consumer",
+    # Telecom
+    "BHARTIARTL":"Telecom",
+    # Defence
+    "BEL":"Defence","MAZDOCK":"Defence","HAL":"Defence",
+    # Ports / Conglomerate
+    "ADANIPORTS":"Ports","ADANIENT":"Conglomerate",
+}
+
+def get_sector(ticker):
+    t = ticker.upper().replace(".NS","").replace(".BO","")
+    return SECTOR_MAP.get(t, "Other")
+
 # =========================================================
 # TICKER UTILS
 # =========================================================
@@ -537,6 +584,79 @@ def generate_research_note(ticker, metrics, canslim_scores, canslim_total,
 {reason}
 """
 
+
+# =========================================================
+# PORTFOLIO FUNCTIONS
+# =========================================================
+
+def parse_portfolio_input(text):
+    """
+    Parse lines of: TICKER, SHARES, BUY_PRICE
+    Returns list of dicts.
+    """
+    holdings = []
+    for line in text.strip().split("\n"):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 3:
+            continue
+        try:
+            holdings.append({
+                "ticker": parts[0].upper(),
+                "shares": float(parts[1]),
+                "buy_price": float(parts[2])
+            })
+        except ValueError:
+            continue
+    return holdings
+
+
+def compute_action_signal(master_score, metrics, risk_metrics,
+                           pnl_pct, market_regime):
+    """
+    Returns (signal, color, reason) based on framework scores + P&L context.
+    """
+    price   = metrics["Price"]
+    sma50   = metrics["SMA50"]
+    sma200  = metrics["SMA200"]
+    rsi     = metrics["RSI"]
+    current_dd = risk_metrics["CurrentDrawdown"]
+    stop    = risk_metrics["StopLoss"]
+
+    # EXIT conditions
+    if price < stop:
+        return "🔴 EXIT", "#e74c3c", "Price below ATR stop loss — exit to protect capital"
+    if master_score < 30:
+        return "🔴 EXIT", "#e74c3c", f"Master Score {master_score}/100 — framework thesis broken"
+    if price < sma200 and master_score < 40 and pnl_pct < -15:
+        return "🔴 EXIT", "#e74c3c", "Below 200DMA, weak score, and meaningful loss — cut position"
+
+    # TRIM conditions
+    if pnl_pct > 50 and master_score < 50:
+        return "🟠 TRIM", "#f39c12", f"Up {pnl_pct:.0f}% but momentum fading (Score {master_score}) — book partial profits"
+    if rsi > 78:
+        return "🟠 TRIM", "#f39c12", f"RSI {rsi:.0f} — extremely overbought, reduce exposure"
+    if master_score < 45 and pnl_pct > 20:
+        return "🟠 TRIM", "#f39c12", "Score weakening while in profit — trim to reduce risk"
+    if current_dd < -20 and master_score < 50:
+        return "🟠 TRIM", "#f39c12", f"Down {current_dd:.0f}% from highs with weak score — reduce position"
+
+    # ADD conditions
+    if (master_score >= 65 and price > sma50 > sma200
+            and rsi < 72 and metrics["Momentum3M"] > 0
+            and market_regime == "Bull"):
+        return "🟢 ADD", "#2ecc71", f"Strong setup (Score {master_score}) in bull market — consider adding"
+    if (master_score >= 70 and price > sma200 and rsi < 68):
+        return "🟢 ADD", "#2ecc71", f"High conviction score ({master_score}) with room to run"
+
+    # HOLD
+    if master_score >= 45:
+        return "🔵 HOLD", "#3498db", f"Score {master_score}/100 — thesis intact, stay the course"
+
+    return "🟠 WATCH", "#f39c12", f"Score {master_score}/100 — monitor closely, conditions mixed"
+
 # =========================================================
 # MARKET REGIME BANNER
 # =========================================================
@@ -550,7 +670,7 @@ st.markdown("")
 # TABS
 # =========================================================
 
-tab1, tab2, tab3 = st.tabs(["📊 Basket Screener", "📈 Portfolio Backtest", "🔎 Single Stock Deep Dive"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Basket Screener", "📈 Portfolio Backtest", "🔎 Single Stock Deep Dive", "💼 Portfolio Intelligence"])
 
 # =========================================================
 # TAB 1 — BASKET SCREENER
@@ -986,3 +1106,365 @@ with tab3:
                 risk_metrics, scenarios, market_regime
             )
             st.markdown(note)
+
+
+# =========================================================
+# TAB 4 — PORTFOLIO INTELLIGENCE
+# =========================================================
+
+with tab4:
+    st.header("💼 Portfolio Intelligence")
+    st.caption("Enter your holdings · Get framework scores, P&L, action signals, and sector breakdown")
+
+    col_help, col_ex = st.columns([3, 1])
+    with col_help:
+        st.markdown("""
+**Format:** One holding per line → `TICKER, SHARES, BUY_PRICE`
+Example: `RELIANCE, 50, 1200` means 50 shares of Reliance bought at ₹1200 each
+""")
+    with col_ex:
+        total_capital_port = st.number_input(
+            "Total Portfolio Capital (₹)",
+            min_value=10000, max_value=100000000,
+            value=500000, step=10000, format="%d",
+            help="Used to compute position concentration %"
+        )
+
+    portfolio_text = st.text_area(
+        "Your Holdings",
+        value="RELIANCE, 50, 1200\nCOALINDIA, 100, 400\nBEL, 200, 280\nHDFCBANK, 30, 1500\nINFY, 40, 1400",
+        height=160,
+        placeholder="TICKER, SHARES, BUY_PRICE"
+    )
+
+    st.markdown("---")
+
+    # Watchlist section
+    watchlist_input = st.text_input(
+        "📋 Watchlist (tickers you're tracking but haven't bought)",
+        "NLCINDIA, MAZDOCK, TITAN, BAJAJ-AUTO",
+        help="Comma-separated. Shows entry signals when conditions align."
+    )
+
+    if st.button("🔍 Analyse Portfolio", type="primary", key="analyse_portfolio"):
+
+        holdings = parse_portfolio_input(portfolio_text)
+
+        if not holdings:
+            st.error("No valid holdings found. Use format: TICKER, SHARES, BUY_PRICE")
+        else:
+            # ── Fetch and score all holdings ──────────────────────────
+            port_data = []
+            errors    = []
+
+            prog = st.progress(0)
+            stat = st.empty()
+
+            for i, h in enumerate(holdings):
+                ticker = h["ticker"]
+                stat.text(f"Analysing {ticker}...")
+                df = fetch_data(ticker)
+
+                if df.empty or "Close" not in df.columns or len(df) < 252:
+                    errors.append(f"{ticker} — insufficient data")
+                    prog.progress((i+1)/len(holdings))
+                    continue
+
+                try:
+                    metrics        = compute_metrics(df, benchmark_df)
+                    canslim_s, ct  = compute_canslim_score(df)
+                    _, mp, mpct    = compute_minervini_score(df)
+                    mom_data       = compute_momentum_score(df)
+                    risk_m         = compute_risk_metrics(df)
+                    master, mrec   = compute_master_score(
+                        metrics["Score"], ct, mpct,
+                        mom_data["MomentumScore"], 50, market_regime
+                    )
+
+                    current_price = metrics["Price"]
+                    invested      = h["shares"] * h["buy_price"]
+                    current_val   = h["shares"] * current_price
+                    pnl_inr       = current_val - invested
+                    pnl_pct       = (current_price / h["buy_price"] - 1) * 100
+
+                    signal, sig_color, sig_reason = compute_action_signal(
+                        master, metrics, risk_m, pnl_pct, market_regime
+                    )
+
+                    port_data.append({
+                        "Ticker":        ticker,
+                        "Sector":        get_sector(ticker),
+                        "Shares":        int(h["shares"]),
+                        "Buy ₹":         h["buy_price"],
+                        "Current ₹":     current_price,
+                        "Invested ₹":    round(invested, 0),
+                        "Value ₹":       round(current_val, 0),
+                        "P&L ₹":         round(pnl_inr, 0),
+                        "P&L %":         round(pnl_pct, 1),
+                        "Master Score":  master,
+                        "CANSLIM":       int(ct),
+                        "Minervini/8":   mp,
+                        "Signal":        signal,
+                        "Signal Reason": sig_reason,
+                        "RSI":           metrics["RSI"],
+                        "3M Mom%":       metrics["Momentum3M"],
+                        "Stop ₹":        risk_m["StopLoss"],
+                        "2R Target ₹":   risk_m["Target2R"],
+                        "Port %":        round(current_val / total_capital_port * 100, 1),
+                        "_metrics":      metrics,
+                        "_risk":         risk_m,
+                    })
+                except Exception as e:
+                    errors.append(f"{ticker} — {str(e)[:50]}")
+
+                prog.progress((i+1)/len(holdings))
+
+            prog.empty()
+            stat.empty()
+
+            if not port_data:
+                st.error("Could not analyse any holdings.")
+            else:
+                # ── Portfolio Summary ──────────────────────────────────
+                total_invested = sum(r["Invested ₹"] for r in port_data)
+                total_value    = sum(r["Value ₹"]    for r in port_data)
+                total_pnl      = total_value - total_invested
+                total_pnl_pct  = (total_value / total_invested - 1) * 100 if total_invested > 0 else 0
+                avg_score      = round(sum(r["Master Score"] for r in port_data) / len(port_data))
+
+                st.markdown("### 📊 Portfolio Summary")
+                s1,s2,s3,s4,s5 = st.columns(5)
+                s1.metric("Total Invested",  f"₹{total_invested:,.0f}")
+                s2.metric("Current Value",   f"₹{total_value:,.0f}")
+                s3.metric("Total P&L",       f"₹{total_pnl:+,.0f}", f"{total_pnl_pct:+.1f}%")
+                s4.metric("Avg Master Score",f"{avg_score}/100")
+                s5.metric("Positions",       f"{len(port_data)}")
+
+                # Regime warning
+                if market_regime == "Bear":
+                    st.warning("⚠️ Bear market regime active — Nifty below 200DMA. All scores downgraded 20%. Consider reducing overall exposure.")
+
+                # ── Action Signal Summary ──────────────────────────────
+                st.markdown("### 🎯 Action Signals")
+                exits  = [r for r in port_data if "EXIT"  in r["Signal"]]
+                trims  = [r for r in port_data if "TRIM"  in r["Signal"] or "WATCH" in r["Signal"]]
+                adds   = [r for r in port_data if "ADD"   in r["Signal"]]
+                holds  = [r for r in port_data if "HOLD"  in r["Signal"]]
+
+                ac1,ac2,ac3,ac4 = st.columns(4)
+                ac1.metric("🔴 Exit",  len(exits))
+                ac2.metric("🟠 Trim",  len(trims))
+                ac3.metric("🔵 Hold",  len(holds))
+                ac4.metric("🟢 Add",   len(adds))
+
+                if exits:
+                    st.error("**Exit signals:** " + ", ".join(r["Ticker"] for r in exits))
+                if trims:
+                    st.warning("**Trim/Watch signals:** " + ", ".join(r["Ticker"] for r in trims))
+                if adds:
+                    st.success("**Add signals:** " + ", ".join(r["Ticker"] for r in adds))
+
+                # ── Sector Breakdown ───────────────────────────────────
+                st.markdown("### 🏭 Sector Breakdown")
+                sectors = {}
+                for r in port_data:
+                    s = r["Sector"]
+                    if s not in sectors:
+                        sectors[s] = {"tickers":[], "invested":0, "value":0, "pnl":0}
+                    sectors[s]["tickers"].append(r["Ticker"])
+                    sectors[s]["invested"] += r["Invested ₹"]
+                    sectors[s]["value"]    += r["Value ₹"]
+                    sectors[s]["pnl"]      += r["P&L ₹"]
+
+                sector_rows = []
+                for s, d in sorted(sectors.items(), key=lambda x: -x[1]["value"]):
+                    pnl_pct_s = (d["value"]/d["invested"]-1)*100 if d["invested"]>0 else 0
+                    port_pct_s = d["value"]/total_capital_port*100
+                    sector_rows.append({
+                        "Sector":     s,
+                        "Stocks":     ", ".join(d["tickers"]),
+                        "Invested ₹": f"₹{d['invested']:,.0f}",
+                        "Value ₹":    f"₹{d['value']:,.0f}",
+                        "P&L ₹":      f"₹{d['pnl']:+,.0f}",
+                        "P&L %":      f"{pnl_pct_s:+.1f}%",
+                        "Port %":     f"{port_pct_s:.1f}%"
+                    })
+
+                st.dataframe(pd.DataFrame(sector_rows), use_container_width=True, hide_index=True)
+
+                # Concentration warning
+                for s, d in sectors.items():
+                    conc = d["value"] / total_capital_port * 100
+                    if conc > 30:
+                        st.warning(f"⚠️ Concentration risk: {s} is {conc:.0f}% of your total capital")
+
+                # ── Per-Position Detail ────────────────────────────────
+                st.markdown("### 📋 Position Detail")
+
+                # Group by sector
+                sector_order = sorted(set(r["Sector"] for r in port_data))
+                for sector in sector_order:
+                    sector_positions = [r for r in port_data if r["Sector"] == sector]
+                    if not sector_positions:
+                        continue
+
+                    st.markdown(f"#### 🏷️ {sector}")
+
+                    for r in sector_positions:
+                        pnl_color = "🟢" if r["P&L %"] >= 0 else "🔴"
+                        with st.expander(
+                            f"{r['Ticker']}  ·  {r['Signal']}  ·  "
+                            f"{pnl_color} P&L: ₹{r['P&L ₹']:+,.0f} ({r['P&L %']:+.1f}%)  ·  "
+                            f"Score: {r['Master Score']}/100"
+                        ):
+                            col1, col2, col3 = st.columns(3)
+
+                            with col1:
+                                st.markdown("**Position**")
+                                st.markdown(f"""
+- Shares: {r['Shares']}
+- Buy price: ₹{r['Buy ₹']}
+- Current: ₹{r['Current ₹']}
+- Invested: ₹{r['Invested ₹']:,.0f}
+- Value: ₹{r['Value ₹']:,.0f}
+- P&L: ₹{r['P&L ₹']:+,.0f} ({r['P&L %']:+.1f}%)
+- Portfolio weight: {r['Port %']}%
+""")
+
+                            with col2:
+                                st.markdown("**Framework Scores**")
+                                st.markdown(f"""
+- Master Score: **{r['Master Score']}/100**
+- CANSLIM: {r['CANSLIM']}/100
+- Minervini: {r['Minervini/8']}/8
+- RSI: {r['RSI']:.0f}
+- 3M Momentum: {r['3M Mom%']:+.1f}%
+""")
+                                # Score bar
+                                score_pct = r["Master Score"]
+                                color = "#2ecc71" if score_pct >= 65 else ("#f39c12" if score_pct >= 45 else "#e74c3c")
+                                st.markdown(
+                                    f'<div style="background:#2e3250;border-radius:4px;height:10px;">'
+                                    f'<div style="background:{color};width:{score_pct}%;height:10px;border-radius:4px;"></div>'
+                                    f'</div><small>{score_pct}/100</small>',
+                                    unsafe_allow_html=True
+                                )
+
+                            with col3:
+                                st.markdown("**Risk Levels**")
+                                st.markdown(f"""
+- Stop Loss: ₹{r['Stop ₹']}
+- 2R Target: ₹{r['2R Target ₹']}
+- vs Stop: {"⛔ BELOW STOP" if r['Current ₹'] < r['Stop ₹'] else f"₹{r['Current ₹'] - r['Stop ₹']:.0f} above stop"}
+- vs 2R: {"✅ TARGET HIT" if r['Current ₹'] >= r['2R Target ₹'] else f"₹{r['2R Target ₹'] - r['Current ₹']:.0f} to target"}
+""")
+
+                            # Action signal box
+                            sig_bg = {"EXIT":"#3b0d0d","TRIM":"#3b2a0d",
+                                       "WATCH":"#3b2a0d","HOLD":"#0d1b3b","ADD":"#0d3b1e"}
+                            sig_key = next((k for k in sig_bg if k in r["Signal"]), "HOLD")
+                            st.markdown(
+                                f'<div style="background:{sig_bg[sig_key]};padding:10px 14px;'
+                                f'border-radius:8px;margin-top:8px;">'
+                                f'<strong>{r["Signal"]}</strong> — {r["Signal Reason"]}'
+                                f'</div>',
+                                unsafe_allow_html=True
+                            )
+
+                if errors:
+                    with st.expander(f"⚠️ {len(errors)} ticker(s) could not be analysed"):
+                        for e in errors:
+                            st.write("•", e)
+
+                # ── P&L Waterfall Chart ────────────────────────────────
+                st.markdown("### 📊 P&L by Position")
+                colors_bar = ["#2ecc71" if r["P&L ₹"] >= 0 else "#e74c3c" for r in port_data]
+                fig_pnl = go.Figure(go.Bar(
+                    x=[r["Ticker"] for r in port_data],
+                    y=[r["P&L ₹"] for r in port_data],
+                    marker_color=colors_bar,
+                    text=[f"₹{r['P&L ₹']:+,.0f}\n({r['P&L %']:+.1f}%)" for r in port_data],
+                    textposition="outside"
+                ))
+                fig_pnl.update_layout(
+                    template="plotly_dark", height=320,
+                    margin=dict(l=0,r=0,t=20,b=0),
+                    yaxis_title="P&L (₹)", showlegend=False
+                )
+                st.plotly_chart(fig_pnl, use_container_width=True)
+
+        # ── WATCHLIST ──────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 📋 Watchlist — Entry Signal Tracker")
+        st.caption("Stocks you're tracking but haven't bought yet")
+
+        watch_tickers = [t.strip() for t in watchlist_input.split(",") if t.strip()]
+
+        if watch_tickers and st.button("🔍 Check Watchlist", key="check_watchlist"):
+            watch_rows = []
+            watch_prog = st.progress(0)
+
+            for i, ticker in enumerate(watch_tickers):
+                df = fetch_data(ticker)
+                if df.empty or len(df) < 252:
+                    watch_rows.append({
+                        "Ticker": ticker, "Entry Signal": "❓ No Data",
+                        "Master Score": "-", "Minervini/8": "-",
+                        "Price ₹": "-", "RSI": "-", "3M Mom%": "-", "Reason": "Insufficient data"
+                    })
+                    watch_prog.progress((i+1)/len(watch_tickers))
+                    continue
+
+                try:
+                    metrics       = compute_metrics(df, benchmark_df)
+                    canslim_s, ct = compute_canslim_score(df)
+                    _, mp, mpct   = compute_minervini_score(df)
+                    mom_data      = compute_momentum_score(df)
+                    risk_m        = compute_risk_metrics(df)
+                    master, _     = compute_master_score(
+                        metrics["Score"], ct, mpct,
+                        mom_data["MomentumScore"], 50, market_regime
+                    )
+
+                    # Entry signal logic
+                    if master >= 70 and mp >= 6 and metrics["RSI"] < 70 and metrics["Momentum3M"] > 0:
+                        entry = "🟢 Strong Entry"
+                        reason = f"Score {master}, {mp}/8 Minervini, RSI {metrics['RSI']:.0f} — conditions aligned"
+                    elif master >= 55 and metrics["Price"] > metrics["SMA200"] and metrics["Momentum3M"] > 0:
+                        entry = "🟡 Watch Closely"
+                        reason = f"Score {master} — setup developing but not fully confirmed"
+                    elif metrics["RSI"] < 40 and master >= 45:
+                        entry = "🟡 Oversold — Wait"
+                        reason = "Potentially oversold — wait for RSI recovery above 45 before entering"
+                    else:
+                        entry = "⏳ Not Ready"
+                        reason = f"Score {master}, {mp}/8 Minervini — conditions not aligned yet"
+
+                    watch_rows.append({
+                        "Ticker":       ticker,
+                        "Entry Signal": entry,
+                        "Master Score": master,
+                        "Minervini/8":  mp,
+                        "Price ₹":      f"₹{metrics['Price']}",
+                        "RSI":          round(metrics["RSI"], 1),
+                        "3M Mom%":      f"{metrics['Momentum3M']:+.1f}%",
+                        "Reason":       reason
+                    })
+                except Exception as e:
+                    watch_rows.append({
+                        "Ticker": ticker, "Entry Signal": "❌ Error",
+                        "Master Score": "-", "Minervini/8": "-",
+                        "Price ₹": "-", "RSI": "-", "3M Mom%": "-",
+                        "Reason": str(e)[:60]
+                    })
+
+                watch_prog.progress((i+1)/len(watch_tickers))
+
+            watch_prog.empty()
+
+            if watch_rows:
+                st.dataframe(
+                    pd.DataFrame(watch_rows),
+                    use_container_width=True,
+                    hide_index=True
+                )
