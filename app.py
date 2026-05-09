@@ -1193,46 +1193,66 @@ NAME_TO_TICKER = {
 def parse_groww_excel(file) -> tuple:
     """
     Parse Groww Stocks Holdings Statement Excel.
-    Returns (list of equity holdings, summary dict, list of skipped items).
-    Format is always consistent: header at row index 9, data from row 10.
-    Equity ISINs start with INE. Non-equity (INF, IN002) are filtered out.
+    Actual structure (0-indexed):
+      Row 0:  Name, Rohan Gupta
+      Row 6:  Invested Value, <amount>
+      Row 7:  Closing Value,  <amount>
+      Row 8:  Unrealised P&L, <amount>
+      Row 10: Header row (Stock Name, ISIN, Quantity, ...)
+      Row 11+: Data rows
+    Equity ISINs start with INE. Non-equity filtered out.
     """
     try:
         df = pd.read_excel(file, sheet_name="Sheet1", header=None)
     except Exception as e:
         return [], {}, [f"Could not read file: {e}"]
 
-    # Summary values from known rows
-    try:
-        summary = {
-            "invested":  float(df.iloc[5, 1]),
-            "value":     float(df.iloc[6, 1]),
-            "pnl":       float(df.iloc[7, 1]),
-        }
-    except Exception:
-        summary = {}
+    # Scan for summary values by label (robust to row shifts)
+    summary = {}
+    for i in range(min(15, len(df))):
+        label = str(df.iloc[i, 0]).strip().lower()
+        val   = df.iloc[i, 1]
+        if "invested" in label:
+            try: summary["invested"] = float(val)
+            except: pass
+        elif "closing" in label:
+            try: summary["value"] = float(val)
+            except: pass
+        elif "unrealised" in label or "p&l" in label:
+            try: summary["pnl"] = float(val)
+            except: pass
 
-    # Data rows start at index 10 (row 11 in Excel)
-    data_rows = df.iloc[10:].copy()
+    # Find the header row by scanning for "Stock Name"
+    header_row = None
+    for i in range(len(df)):
+        cell = str(df.iloc[i, 0]).strip().lower()
+        if "stock name" in cell:
+            header_row = i
+            break
+
+    if header_row is None:
+        return [], summary, ["Could not find data header row in file"]
+
+    # Data starts immediately after header row
+    data_rows = df.iloc[header_row + 1:].copy()
     data_rows.columns = range(len(data_rows.columns))
 
     holdings, skipped = [], []
 
     for _, row in data_rows.iterrows():
-        name  = str(row[0]).strip() if pd.notna(row[0]) else ""
-        isin  = str(row[1]).strip() if pd.notna(row[1]) else ""
-        qty   = row[2]
+        name      = str(row[0]).strip() if pd.notna(row[0]) else ""
+        isin      = str(row[1]).strip() if pd.notna(row[1]) else ""
+        qty       = row[2]
         avg_price = row[3]
 
-        if not name or not isin or isin == "nan":
+        if not name or name.lower() == "nan" or not isin or isin.lower() == "nan":
             continue
 
         # Filter: only equities (ISIN starts with INE)
         if not isin.startswith("INE"):
-            skipped.append(f"{name} — skipped (non-equity: {isin[:6]}...)")
+            skipped.append(f"{name} — skipped (non-equity: {isin[:8]})")
             continue
 
-        # Skip zero quantity
         try:
             qty_f = float(qty)
             if qty_f <= 0:
@@ -1254,15 +1274,13 @@ def parse_groww_excel(file) -> tuple:
         name_upper = name.upper().strip()
         ticker = NAME_TO_TICKER.get(name_upper)
         if not ticker:
-            # Try partial match
             for k, v in NAME_TO_TICKER.items():
                 if k in name_upper or name_upper in k:
                     ticker = v
                     break
         if not ticker:
-            # Last resort: use first word as ticker guess
             ticker = name_upper.split()[0]
-            skipped.append(f"{name} — ticker guessed as {ticker} (verify manually)")
+            skipped.append(f"{name} — ticker guessed as '{ticker}' (verify manually)")
 
         holdings.append({
             "ticker":    ticker,
@@ -1318,11 +1336,11 @@ Upload that file below — no manual entry needed.
             help="Stocks Holdings Statement from Groww — always the same format"
         )
     with col_cap:
-        total_capital_port = st.number_input(
-            "Total Portfolio Capital (₹)",
-            min_value=10000, max_value=100000000,
-            value=1000000, step=10000, format="%d",
-            help="Your total capital including cash — for concentration % calculation"
+        new_investment = st.number_input(
+            "New Investment Amount (₹)",
+            min_value=0, max_value=10000000,
+            value=0, step=5000, format="%d",
+            help="Additional capital you plan to deploy — leave 0 if just reviewing current portfolio"
         )
 
     # ── Watchlist ──────────────────────────────────────────
@@ -1340,14 +1358,20 @@ Upload that file below — no manual entry needed.
         if not holdings:
             st.error("Could not extract any equity holdings. Check the file format.")
         else:
+            # Set total capital from Excel + new investment
+            portfolio_current_value = groww_summary.get("value", 0)
+            total_capital_port = portfolio_current_value + new_investment
+
             # Show what was parsed
             st.success(f"✅ Found **{len(holdings)} equity positions** from your Groww statement")
 
-            if groww_summary:
-                gs1, gs2, gs3 = st.columns(3)
-                gs1.metric("Invested (Groww)", f"₹{groww_summary.get('invested',0):,.0f}")
-                gs2.metric("Current Value (Groww)", f"₹{groww_summary.get('value',0):,.0f}")
-                gs3.metric("Unrealised P&L (Groww)", f"₹{groww_summary.get('pnl',0):+,.0f}")
+            gs1, gs2, gs3, gs4 = st.columns(4)
+            gs1.metric("Invested", f"₹{groww_summary.get('invested',0):,.0f}")
+            gs2.metric("Current Value", f"₹{portfolio_current_value:,.0f}")
+            gs3.metric("Unrealised P&L", f"₹{groww_summary.get('pnl',0):+,.0f}",
+                       f"{groww_summary.get('pnl',0)/max(groww_summary.get('invested',1),1)*100:+.1f}%")
+            gs4.metric("Total Capital", f"₹{total_capital_port:,.0f}",
+                       f"+₹{new_investment:,.0f} new" if new_investment > 0 else "no new investment")
 
             if parse_skipped:
                 with st.expander(f"ℹ️ {len(parse_skipped)} items filtered/skipped"):
