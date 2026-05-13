@@ -178,13 +178,22 @@ def normalize_ticker(ticker):
         ticker = ticker + ".NS"
     return ticker
 
-@st.cache_data(ttl=7200)
+# Manual cache — only stores SUCCESSFUL fetches, never empty results
+# This prevents Streamlit's cache from locking in failed yfinance responses
+_fetch_cache = {}
+
 def fetch_data(ticker, period="5y"):
     ticker = normalize_ticker(ticker)
+    cache_key = f"{ticker}_{period}"
+
+    # Return cached result only if it was a successful fetch
+    if cache_key in _fetch_cache:
+        return _fetch_cache[cache_key]
+
     for attempt in range(3):  # retry up to 3 times with backoff
         try:
             if attempt > 0:
-                time.sleep(2 * attempt)  # wait 2s, then 4s between retries
+                time.sleep(3 * attempt)  # 3s then 6s between retries
             df = yf.download(ticker, period=period, auto_adjust=True, progress=False)
             if df.empty:
                 continue
@@ -199,17 +208,21 @@ def fetch_data(ticker, period="5y"):
             df = df[needed].copy()
             df.dropna(subset=["Close"], inplace=True)
             if len(df) > 0:
+                _fetch_cache[cache_key] = df  # only cache successes
                 return df
         except Exception:
             continue
-    return pd.DataFrame()
+    return pd.DataFrame()  # never cached — always retried next time
 
 # =========================================================
 # BENCHMARK + MARKET REGIME
 # =========================================================
 
-@st.cache_data(ttl=3600)
+_benchmark_cache = {}
+
 def fetch_benchmark():
+    if "benchmark" in _benchmark_cache:
+        return _benchmark_cache["benchmark"]
     for ticker in ["^NSEI", "^NSEI.NS", "NIFTYBEES.NS"]:
         try:
             df = yf.download(ticker, period="5y", auto_adjust=True, progress=False)
@@ -221,7 +234,9 @@ def fetch_benchmark():
             if "Close" not in df.columns and "Adj Close" in df.columns:
                 df.rename(columns={"Adj Close": "Close"}, inplace=True)
             if "Close" in df.columns and len(df) > 100:
-                return df[["Close"]].dropna()
+                result = df[["Close"]].dropna()
+                _benchmark_cache["benchmark"] = result
+                return result
         except Exception:
             continue
     return pd.DataFrame()
