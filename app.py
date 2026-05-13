@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
+import time
 
 # =========================================================
 # PAGE CONFIG
@@ -177,11 +178,13 @@ def normalize_ticker(ticker):
         ticker = ticker + ".NS"
     return ticker
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=7200)
 def fetch_data(ticker, period="5y"):
     ticker = normalize_ticker(ticker)
-    for attempt in range(2):  # retry once on empty/error
+    for attempt in range(3):  # retry up to 3 times with backoff
         try:
+            if attempt > 0:
+                time.sleep(2 * attempt)  # wait 2s, then 4s between retries
             df = yf.download(ticker, period=period, auto_adjust=True, progress=False)
             if df.empty:
                 continue
@@ -741,6 +744,8 @@ with tab1:
         all_data = {}
         for i, ticker in enumerate(tickers_to_screen):
             status.text(f"Fetching {ticker}... ({i+1}/{len(tickers_to_screen)})")
+            if i > 0:
+                time.sleep(0.2)
             df = fetch_data(ticker)
             if df.empty or "Close" not in df.columns or len(df) < 252:
                 skipped.append(f"{ticker} — insufficient data")
@@ -1443,6 +1448,8 @@ Upload that file below — no manual entry needed.
                 for i, h in enumerate(holdings):
                     ticker = h["ticker"]
                     stat.text(f"Analysing {ticker} ({h['name'][:30]})...")
+                    if i > 0:
+                        time.sleep(0.3)  # small delay to avoid Yahoo Finance rate limiting
                     df = fetch_data(ticker)
 
                     MIN_DAYS = 100
