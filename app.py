@@ -1341,11 +1341,18 @@ def parse_groww_excel(file) -> tuple:
             ticker = name_upper.split()[0]
             skipped.append(f"{name} — ticker guessed as '{ticker}' (verify manually)")
 
+        # Also capture closing price from Excel as fallback
+        try:
+            closing_price_f = float(row[5]) if pd.notna(row[5]) else None
+        except (ValueError, TypeError):
+            closing_price_f = None
+
         holdings.append({
-            "ticker":    ticker,
-            "name":      name,
-            "shares":    qty_f,
-            "buy_price": avg_f,
+            "ticker":        ticker,
+            "name":          name,
+            "shares":        qty_f,
+            "buy_price":     avg_f,
+            "excel_price":   closing_price_f,  # fallback if yfinance fails
         })
 
     return holdings, summary, skipped
@@ -1470,10 +1477,38 @@ Upload that file below — no manual entry needed.
                     MIN_DAYS = 100
                     limited_data = len(df) < 252 if not df.empty else True
                     if df.empty or "Close" not in df.columns or len(df) < MIN_DAYS:
-                        if len(df) > 0:
-                            errors.append(f"{ticker} ({h['name'][:30]}) — only {len(df)} days of data (need {MIN_DAYS}+)")
+                        # Fallback: use closing price from Excel if available
+                        excel_price = h.get("excel_price")
+                        if excel_price and excel_price > 0:
+                            invested   = h["shares"] * h["buy_price"]
+                            current_val = h["shares"] * excel_price
+                            pnl_inr    = current_val - invested
+                            pnl_pct    = (excel_price / h["buy_price"] - 1) * 100
+                            port_data.append({
+                                "Ticker":       ticker,
+                                "Company":      h["name"],
+                                "Sector":       get_sector(ticker),
+                                "Shares":       int(h["shares"]),
+                                "Buy ₹":        h["buy_price"],
+                                "Current ₹":    excel_price,
+                                "Invested ₹":   round(invested, 0),
+                                "Value ₹":      round(current_val, 0),
+                                "P&L ₹":        round(pnl_inr, 0),
+                                "P&L %":        round(pnl_pct, 1),
+                                "Master Score": 0,
+                                "CANSLIM":      0,
+                                "Minervini/8":  0,
+                                "Signal":       "⚪ NO DATA",
+                                "Signal Reason":"Market data unavailable — showing P&L from Groww report price",
+                                "RSI":          0,
+                                "3M Mom%":      0,
+                                "Stop ₹":       round(excel_price * 0.92, 2),
+                                "2R Target ₹":  round(excel_price * 1.08, 2),
+                                "Port %":       round(current_val / total_capital_port * 100, 1),
+                                "LimitedData":  True,
+                            })
                         else:
-                            errors.append(f"{ticker} ({h['name'][:30]}) — no data returned (try again later)")
+                            errors.append(f"{ticker} ({h['name'][:30]}) — no market data available")
                         prog.progress((i+1)/len(holdings))
                         continue
 
@@ -1537,7 +1572,8 @@ Upload that file below — no manual entry needed.
                     total_value    = sum(r["Value ₹"]    for r in port_data)
                     total_pnl      = total_value - total_invested
                     total_pnl_pct  = (total_value / total_invested - 1) * 100 if total_invested > 0 else 0
-                    avg_score      = round(sum(r["Master Score"] for r in port_data) / len(port_data))
+                    scored = [r for r in port_data if "NO DATA" not in r["Signal"]]
+                    avg_score = round(sum(r["Master Score"] for r in scored) / len(scored)) if scored else 0
 
                     st.markdown("### 📊 Portfolio Summary")
                     s1,s2,s3,s4,s5 = st.columns(5)
@@ -1557,10 +1593,11 @@ Upload that file below — no manual entry needed.
 
                     # ── Action Signal Summary ──────────────────────────
                     st.markdown("### 🎯 Action Signals")
-                    exits = [r for r in port_data if "EXIT"  in r["Signal"]]
-                    trims = [r for r in port_data if "TRIM"  in r["Signal"] or "WATCH" in r["Signal"]]
-                    adds  = [r for r in port_data if "ADD"   in r["Signal"]]
-                    holds = [r for r in port_data if "HOLD"  in r["Signal"]]
+                    exits    = [r for r in port_data if "EXIT"  in r["Signal"]]
+                    trims    = [r for r in port_data if "TRIM"  in r["Signal"] or "WATCH" in r["Signal"]]
+                    adds     = [r for r in port_data if "ADD"   in r["Signal"]]
+                    holds    = [r for r in port_data if "HOLD"  in r["Signal"]]
+                    no_data  = [r for r in port_data if "NO DATA" in r["Signal"]]
 
                     ac1,ac2,ac3,ac4 = st.columns(4)
                     ac1.metric("🔴 Exit",  len(exits))
@@ -1574,6 +1611,10 @@ Upload that file below — no manual entry needed.
                         st.warning("**Trim/Watch:** " + ", ".join(r["Ticker"] for r in trims))
                     if adds:
                         st.success("**Add signals:** " + ", ".join(r["Ticker"] for r in adds))
+                    if no_data:
+                        st.info("**⚪ Showing P&L only (no market data):** " +
+                                ", ".join(r["Ticker"] for r in no_data) +
+                                " — scores unavailable but position value shown from Groww report")
 
                     # ── Sector Breakdown ───────────────────────────────
                     st.markdown("### 🏭 Sector Breakdown")
@@ -1629,12 +1670,36 @@ Upload that file below — no manual entry needed.
                         st.markdown(f"#### 🏷️ {sector}")
                         for r in positions:
                             icon = "🟢" if r["P&L %"] >= 0 else "🔴"
-                            data_flag = " · ⚠️ Limited Data" if r.get("LimitedData") else ""
-                            with st.expander(
-                                f"{r['Ticker']}  ·  {r['Signal']}  ·  "
-                                f"{icon} {r['P&L %']:+.1f}%  (₹{r['P&L ₹']:+,.0f})  ·  "
-                                f"Score {r['Master Score']}/100{data_flag}"
-                            ):
+                            no_data = "NO DATA" in r["Signal"]
+                            if no_data:
+                                expander_label = (
+                                    f"📵 {r['Ticker']}  ·  ⚪ NO MARKET DATA  ·  "
+                                    f"{icon} {r['P&L %']:+.1f}%  (₹{r['P&L ₹']:+,.0f})  ·  "
+                                    f"Price from Groww report ({r['Current ₹']})"
+                                )
+                            else:
+                                data_flag = " · ⚠️ Limited Data" if r.get("LimitedData") else ""
+                                expander_label = (
+                                    f"{r['Ticker']}  ·  {r['Signal']}  ·  "
+                                    f"{icon} {r['P&L %']:+.1f}%  (₹{r['P&L ₹']:+,.0f})  ·  "
+                                    f"Score {r['Master Score']}/100{data_flag}"
+                                )
+                            with st.expander(expander_label):
+                                # NO DATA banner
+                                if "NO DATA" in r["Signal"]:
+                                    st.markdown(
+                                        '<div style="background:#1a1d2e;border:1px solid #f39c12;'
+                                        'border-radius:8px;padding:10px 14px;margin-bottom:12px;">'
+                                        '📵 <strong>Market data unavailable for this ticker</strong> — '
+                                        'yfinance could not pull live data. '
+                                        f'Prices shown are from your Groww report dated report date. '
+                                        'Framework scores (CANSLIM, Minervini, Master Score) are not available. '
+                                        'P&amp;L is calculated using the Groww closing price of '
+                                        f'<strong>₹{r["Current ₹"]}</strong>.'
+                                        '</div>',
+                                        unsafe_allow_html=True
+                                    )
+
                                 c1, c2, c3 = st.columns(3)
                                 with c1:
                                     st.markdown("**Position**")
@@ -1642,27 +1707,38 @@ Upload that file below — no manual entry needed.
 - Company: {r["Company"]}
 - Shares: {r["Shares"]}
 - Buy price: ₹{r["Buy ₹"]}
-- Current: ₹{r["Current ₹"]}
+- Current: ₹{r["Current ₹"]} {"📵 Groww report price" if "NO DATA" in r["Signal"] else ""}
 - Invested: ₹{r["Invested ₹"]:,.0f}
 - Value: ₹{r["Value ₹"]:,.0f}
 - P&L: ₹{r["P&L ₹"]:+,.0f} ({r["P&L %"]:+.1f}%)
 - Portfolio weight: {r["Port %"]}%
 """)
                                 with c2:
-                                    st.markdown("**Framework Scores**")
-                                    sc = r["Master Score"]
-                                    col = "#2ecc71" if sc>=65 else ("#f39c12" if sc>=45 else "#e74c3c")
-                                    st.markdown(f"""
+                                    if "NO DATA" in r["Signal"]:
+                                        st.markdown("**Framework Scores**")
+                                        st.markdown(
+                                            '<div style="background:#2e3250;border-radius:8px;'
+                                            'padding:12px;text-align:center;color:#a0aabf;">'
+                                            '📵<br><strong>Not available</strong><br>'
+                                            '<small>Live market data required<br>for framework scoring</small>'
+                                            '</div>',
+                                            unsafe_allow_html=True
+                                        )
+                                    else:
+                                        st.markdown("**Framework Scores**")
+                                        sc = r["Master Score"]
+                                        col = "#2ecc71" if sc>=65 else ("#f39c12" if sc>=45 else "#e74c3c")
+                                        st.markdown(f"""
 - Master Score: **{sc}/100**
 - CANSLIM: {r["CANSLIM"]}/100
 - Minervini: {r["Minervini/8"]}/8
 - RSI: {r["RSI"]:.0f}
 - 3M Momentum: {r["3M Mom%"]:+.1f}%
 """)
-                                    st.markdown(
-                                        f'<div style="background:#2e3250;border-radius:4px;height:10px;">'                                        f'<div style="background:{col};width:{sc}%;height:10px;border-radius:4px;"></div>'                                        f'</div><small>{sc}/100</small>',
-                                        unsafe_allow_html=True
-                                    )
+                                        st.markdown(
+                                            f'<div style="background:#2e3250;border-radius:4px;height:10px;">'                                            f'<div style="background:{col};width:{sc}%;height:10px;border-radius:4px;"></div>'                                            f'</div><small>{sc}/100</small>',
+                                            unsafe_allow_html=True
+                                        )
                                 with c3:
                                     st.markdown("**Risk Levels**")
                                     vs_stop = "⛔ BELOW STOP" if r["Current ₹"] < r["Stop ₹"] else f"₹{r['Current ₹']-r['Stop ₹']:.0f} above"
@@ -1674,7 +1750,8 @@ Upload that file below — no manual entry needed.
 - vs 2R Target: {vs_tgt}
 """)
                                 sig_bg = {"EXIT":"#3b0d0d","TRIM":"#3b2a0d",
-                                           "WATCH":"#3b2a0d","HOLD":"#0d1b3b","ADD":"#0d3b1e"}
+                                           "WATCH":"#3b2a0d","HOLD":"#0d1b3b",
+                                           "ADD":"#0d3b1e","NO DATA":"#2e3250"}
                                 sig_key = next((k for k in sig_bg if k in r["Signal"]), "HOLD")
                                 st.markdown(
                                     f'<div style="background:{sig_bg[sig_key]};padding:10px 14px;'                                    f'border-radius:8px;margin-top:8px;">'                                    f'<strong>{r["Signal"]}</strong> — {r["Signal Reason"]}'                                    f'</div>',
