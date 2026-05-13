@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 # =========================================================
 
 st.set_page_config(
-    page_title="BharatTrack V18",
+    page_title="BharatTrack V20",
     layout="wide",
     page_icon="🚀"
 )
@@ -50,7 +50,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🚀 BharatTrack V18")
+st.title("🚀 BharatTrack V20")
 st.caption("CANSLIM · Minervini Trend Template · Momentum Factor · IBD RS Rank · Basket Screener · Market Regime Filter")
 
 # =========================================================
@@ -135,6 +135,32 @@ SECTOR_MAP = {
     "BEL":"Defence","MAZDOCK":"Defence","HAL":"Defence",
     # Ports / Conglomerate
     "ADANIPORTS":"Ports","ADANIENT":"Conglomerate",
+    # Consumer / Jewellery
+    "KALYANKJIL":"Consumer","TRENT":"Retail","DMART":"Retail",
+    "ASIANPAINT":"Consumer","TITAN":"Consumer","VBL":"FMCG",
+    # Auto ancillary / Tyres
+    "APOLLOTYRE":"Auto","BALKRISIND":"Auto","MRF":"Auto",
+    # Real Estate
+    "ANANTRAJ":"Real Estate","GODREJPROP":"Real Estate",
+    "OBEROIRLTY":"Real Estate","PRESTIGE":"Real Estate",
+    # Capital Goods / Engineering
+    "TECHNOE":"Capital Goods","KRNHEAT":"Capital Goods",
+    "POLYCAB":"Capital Goods","ABB":"Capital Goods",
+    # Financial Services
+    "CRISIL":"Financial Services","MUTHOOTFIN":"Financial Services",
+    "CHOLAFIN":"Financial Services","CANFINHOME":"Financial Services",
+    # Healthcare IT / Services
+    "INDEGENE":"Healthcare IT","SAGILITY":"Healthcare IT",
+    "MAXHEALTH":"Healthcare","FORTIS":"Healthcare",
+    # Telecom / Infra
+    "RAILTEL":"Infrastructure","HFCL":"Telecom",
+    "INDIAMART":"IT","DIXON":"Electronics",
+    # Chemicals / Materials
+    "STYRENIX":"Chemicals","DEEPAKNTR":"Chemicals",
+    "NAVINFLUOR":"Chemicals","PIIND":"Chemicals",
+    # Small / Other
+    "TAKE":"IT","NLCINDIA":"Power","HAL":"Defence",
+    "MAZDOCK":"Defence","BEL":"Defence",
 }
 
 def get_sector(ticker):
@@ -154,23 +180,26 @@ def normalize_ticker(ticker):
 @st.cache_data(ttl=3600)
 def fetch_data(ticker, period="5y"):
     ticker = normalize_ticker(ticker)
-    try:
-        df = yf.download(ticker, period=period, auto_adjust=True, progress=False)
-        if df.empty:
-            return pd.DataFrame()
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df.columns = [c.strip().title() for c in df.columns]
-        if "Close" not in df.columns and "Adj Close" in df.columns:
-            df.rename(columns={"Adj Close": "Close"}, inplace=True)
-        needed = [c for c in ["Close", "Open", "High", "Low", "Volume"] if c in df.columns]
-        if not needed or "Close" not in needed:
-            return pd.DataFrame()
-        df = df[needed].copy()
-        df.dropna(subset=["Close"], inplace=True)
-        return df
-    except Exception:
-        return pd.DataFrame()
+    for attempt in range(2):  # retry once on empty/error
+        try:
+            df = yf.download(ticker, period=period, auto_adjust=True, progress=False)
+            if df.empty:
+                continue
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            df.columns = [c.strip().title() for c in df.columns]
+            if "Close" not in df.columns and "Adj Close" in df.columns:
+                df.rename(columns={"Adj Close": "Close"}, inplace=True)
+            needed = [c for c in ["Close", "Open", "High", "Low", "Volume"] if c in df.columns]
+            if not needed or "Close" not in needed:
+                continue
+            df = df[needed].copy()
+            df.dropna(subset=["Close"], inplace=True)
+            if len(df) > 0:
+                return df
+        except Exception:
+            continue
+    return pd.DataFrame()
 
 # =========================================================
 # BENCHMARK + MARKET REGIME
@@ -1134,7 +1163,8 @@ NAME_TO_TICKER = {
     "SAGILITY LIMITED":              "SAGILITY",
     "STYRENIX PERFORMANCE LTD":      "STYRENIX",
     "TAKE SOLUTIONS LTD":            "TAKE",
-    "TATA MOTORS PASS VEH LTD":      "TATAMOTORS",
+    "TATA MOTORS PASS VEH LTD":      "TATAMOTORS",  # Groww shows PV demerger shares as this
+    "TATA MOTORS LIMITED":           "TATAMOTORS",
     "TATA MOTORS LTD":               "TATAMOTORS",
     "TECHNO ELEC & ENG CO. LTD":     "TECHNOE",
     "TECHNO ELEC & ENG CO LTD":      "TECHNOE",
@@ -1415,8 +1445,13 @@ Upload that file below — no manual entry needed.
                     stat.text(f"Analysing {ticker} ({h['name'][:30]})...")
                     df = fetch_data(ticker)
 
-                    if df.empty or "Close" not in df.columns or len(df) < 252:
-                        errors.append(f"{ticker} ({h['name'][:30]}) — insufficient data")
+                    MIN_DAYS = 100
+                    limited_data = len(df) < 252 if not df.empty else True
+                    if df.empty or "Close" not in df.columns or len(df) < MIN_DAYS:
+                        if len(df) > 0:
+                            errors.append(f"{ticker} ({h['name'][:30]}) — only {len(df)} days of data (need {MIN_DAYS}+)")
+                        else:
+                            errors.append(f"{ticker} ({h['name'][:30]}) — no data returned (try again later)")
                         prog.progress((i+1)/len(holdings))
                         continue
 
@@ -1445,6 +1480,7 @@ Upload that file below — no manual entry needed.
                             "Ticker":       ticker,
                             "Company":      h["name"],
                             "Sector":       get_sector(ticker),
+                            "LimitedData":  limited_data,
                             "Shares":       int(h["shares"]),
                             "Buy ₹":        h["buy_price"],
                             "Current ₹":    current_price,
@@ -1490,7 +1526,12 @@ Upload that file below — no manual entry needed.
                     s5.metric("Positions",        f"{len(port_data)}")
 
                     if market_regime == "Bear":
-                        st.warning("⚠️ Bear market regime — Nifty below 200DMA. All scores downgraded. Consider reducing overall exposure.")
+                        st.warning(
+                            "⚠️ Bear Market Regime — Nifty is below its 200-day moving average. "
+                            "All Master Scores are automatically reduced by 20% to reflect higher risk. "
+                            "A stock scoring 40 here would score ~50 in a bull market. "
+                            "Use Exit/Trim signals with extra caution — don't panic sell quality holdings."
+                        )
 
                     # ── Action Signal Summary ──────────────────────────
                     st.markdown("### 🎯 Action Signals")
@@ -1566,10 +1607,11 @@ Upload that file below — no manual entry needed.
                         st.markdown(f"#### 🏷️ {sector}")
                         for r in positions:
                             icon = "🟢" if r["P&L %"] >= 0 else "🔴"
+                            data_flag = " · ⚠️ Limited Data" if r.get("LimitedData") else ""
                             with st.expander(
                                 f"{r['Ticker']}  ·  {r['Signal']}  ·  "
                                 f"{icon} {r['P&L %']:+.1f}%  (₹{r['P&L ₹']:+,.0f})  ·  "
-                                f"Score {r['Master Score']}/100"
+                                f"Score {r['Master Score']}/100{data_flag}"
                             ):
                                 c1, c2, c3 = st.columns(3)
                                 with c1:
