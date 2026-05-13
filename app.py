@@ -4,13 +4,16 @@ import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
 import time
+import requests
+from bs4 import BeautifulSoup
+import re
 
 # =========================================================
 # PAGE CONFIG
 # =========================================================
 
 st.set_page_config(
-    page_title="BharatTrack V20",
+    page_title="BharatTrack V21",
     layout="wide",
     page_icon="🚀"
 )
@@ -51,8 +54,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🚀 BharatTrack V20")
-st.caption("CANSLIM · Minervini Trend Template · Momentum Factor · IBD RS Rank · Basket Screener · Market Regime Filter")
+st.title("🚀 BharatTrack V21")
+st.caption("CANSLIM · Minervini · Momentum · IBD RS Rank · Screener.in Fundamentals · Quality Score · Market Regime Filter")
 
 # =========================================================
 # INDEX BASKETS
@@ -95,6 +98,180 @@ BASKETS = {
     "Custom": []
 }
 
+
+
+# =========================================================
+# SCREENER.IN FUNDAMENTALS
+# =========================================================
+
+_screener_cache = {}
+
+def fetch_screener_fundamentals(ticker):
+    """
+    Scrapes screener.in company page for key fundamental ratios.
+    Returns dict with PE, ROCE, ROE, Sales Growth, Profit Growth,
+    Debt/Equity, Market Cap, Pros, Cons.
+    Caches results per session to avoid repeated scraping.
+    """
+    clean = ticker.upper().replace(".NS","").replace(".BO","")
+    if clean in _screener_cache:
+        return _screener_cache[clean]
+
+    url = f"https://www.screener.in/company/{clean}/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    result = {
+        "PE": None, "ROCE": None, "ROE": None,
+        "BookValue": None, "DividendYield": None,
+        "MarketCap": None, "DebtToEquity": None,
+        "SalesGrowth3Y": None, "ProfitGrowth3Y": None,
+        "SalesGrowth5Y": None, "ProfitGrowth5Y": None,
+        "Pros": [], "Cons": [],
+        "Available": False
+    }
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=8)
+        if resp.status_code != 200:
+            return result
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # ── Key Ratios ──────────────────────────────────────
+        ratios_section = soup.find("ul", id="top-ratios")
+        if ratios_section:
+            for li in ratios_section.find_all("li"):
+                name_tag = li.find("span", class_="name")
+                val_tag  = li.find("span", class_="nowrap value") or li.find("span", class_="value")
+                if not name_tag or not val_tag:
+                    continue
+                name = name_tag.get_text(strip=True).lower()
+                raw  = val_tag.get_text(strip=True)
+                # Clean: remove ₹, Cr., commas, %
+                clean_val = re.sub(r"[₹,Cr\.\s%]", "", raw).strip()
+                try:
+                    val = float(clean_val)
+                except ValueError:
+                    val = None
+
+                if "p/e" in name or "stock p/e" in name:
+                    result["PE"] = val
+                elif "roce" in name:
+                    result["ROCE"] = val
+                elif "roe" in name:
+                    result["ROE"] = val
+                elif "book value" in name:
+                    result["BookValue"] = val
+                elif "dividend yield" in name:
+                    result["DividendYield"] = val
+                elif "market cap" in name:
+                    result["MarketCap"] = raw  # keep formatted
+
+        # ── CAGR Growth Rates ────────────────────────────────
+        # screener.in shows these in a section with class "ranges-wrapper"
+        # or in the company-info section — look for the CAGR table
+        cagr_section = soup.find("section", id="profit-loss")
+        if not cagr_section:
+            cagr_section = soup.find("div", class_="company-info")
+
+        # Try parsing from text blocks
+        page_text = soup.get_text()
+
+        # Find Sales CAGR patterns e.g. "Compounded Sales Growth 3 Years: 12%"
+        sales_3y = re.search(r"Sales Growth.*?3 Years?[:\s]+(-?\d+\.?\d*)%", page_text, re.IGNORECASE | re.DOTALL)
+        sales_5y = re.search(r"Sales Growth.*?5 Years?[:\s]+(-?\d+\.?\d*)%", page_text, re.IGNORECASE | re.DOTALL)
+        profit_3y = re.search(r"Profit Growth.*?3 Years?[:\s]+(-?\d+\.?\d*)%", page_text, re.IGNORECASE | re.DOTALL)
+        profit_5y = re.search(r"Profit Growth.*?5 Years?[:\s]+(-?\d+\.?\d*)%", page_text, re.IGNORECASE | re.DOTALL)
+
+        if sales_3y:   result["SalesGrowth3Y"]   = float(sales_3y.group(1))
+        if sales_5y:   result["SalesGrowth5Y"]   = float(sales_5y.group(1))
+        if profit_3y:  result["ProfitGrowth3Y"]  = float(profit_3y.group(1))
+        if profit_5y:  result["ProfitGrowth5Y"]  = float(profit_5y.group(1))
+
+        # ── Pros & Cons ──────────────────────────────────────
+        pros_section = soup.find("div", class_="pros")
+        if pros_section:
+            result["Pros"] = [li.get_text(strip=True) for li in pros_section.find_all("li")][:4]
+
+        cons_section = soup.find("div", class_="cons")
+        if cons_section:
+            result["Cons"] = [li.get_text(strip=True) for li in cons_section.find_all("li")][:4]
+
+        if result["ROCE"] is not None or result["PE"] is not None:
+            result["Available"] = True
+
+        _screener_cache[clean] = result
+        return result
+
+    except Exception:
+        return result
+
+
+def compute_quality_score(fundamentals):
+    """
+    Quality Score (0-100) from Screener.in fundamentals.
+    Based on ROCE, ROE, PE, growth, debt.
+    """
+    if not fundamentals.get("Available"):
+        return None, {}
+
+    scores = {}
+
+    # ROCE — capital efficiency king
+    roce = fundamentals.get("ROCE")
+    if roce is not None:
+        if roce >= 20:   scores["ROCE"] = (25, f"Excellent ROCE {roce:.1f}% (>20%)")
+        elif roce >= 15: scores["ROCE"] = (18, f"Strong ROCE {roce:.1f}% (>15%)")
+        elif roce >= 10: scores["ROCE"] = (10, f"Moderate ROCE {roce:.1f}%")
+        else:            scores["ROCE"] = (3,  f"Weak ROCE {roce:.1f}% (<10%)")
+    else:
+        scores["ROCE"] = (0, "ROCE not available")
+
+    # ROE
+    roe = fundamentals.get("ROE")
+    if roe is not None:
+        if roe >= 20:    scores["ROE"] = (20, f"Excellent ROE {roe:.1f}%")
+        elif roe >= 12:  scores["ROE"] = (14, f"Good ROE {roe:.1f}%")
+        elif roe >= 8:   scores["ROE"] = (8,  f"Moderate ROE {roe:.1f}%")
+        else:            scores["ROE"] = (2,  f"Weak ROE {roe:.1f}%")
+    else:
+        scores["ROE"] = (0, "ROE not available")
+
+    # Earnings growth (3Y profit CAGR)
+    pg3 = fundamentals.get("ProfitGrowth3Y")
+    if pg3 is not None:
+        if pg3 >= 20:    scores["ProfitGrowth"] = (20, f"Strong 3Y profit growth {pg3:.0f}%")
+        elif pg3 >= 10:  scores["ProfitGrowth"] = (14, f"Good 3Y profit growth {pg3:.0f}%")
+        elif pg3 >= 0:   scores["ProfitGrowth"] = (8,  f"Modest 3Y profit growth {pg3:.0f}%")
+        else:            scores["ProfitGrowth"] = (2,  f"Declining profits 3Y: {pg3:.0f}%")
+    else:
+        scores["ProfitGrowth"] = (0, "Profit growth not available")
+
+    # Revenue growth (3Y sales CAGR)
+    sg3 = fundamentals.get("SalesGrowth3Y")
+    if sg3 is not None:
+        if sg3 >= 15:    scores["SalesGrowth"] = (20, f"Strong 3Y sales growth {sg3:.0f}%")
+        elif sg3 >= 8:   scores["SalesGrowth"] = (14, f"Good 3Y sales growth {sg3:.0f}%")
+        elif sg3 >= 0:   scores["SalesGrowth"] = (8,  f"Modest 3Y sales growth {sg3:.0f}%")
+        else:            scores["SalesGrowth"] = (2,  f"Declining sales 3Y: {sg3:.0f}%")
+    else:
+        scores["SalesGrowth"] = (0, "Sales growth not available")
+
+    # Valuation (PE)
+    pe = fundamentals.get("PE")
+    if pe is not None and pe > 0:
+        if pe < 15:      scores["Valuation"] = (15, f"Attractive valuation PE {pe:.0f}x")
+        elif pe < 25:    scores["Valuation"] = (10, f"Fair valuation PE {pe:.0f}x")
+        elif pe < 40:    scores["Valuation"] = (5,  f"Premium valuation PE {pe:.0f}x")
+        else:            scores["Valuation"] = (2,  f"Expensive valuation PE {pe:.0f}x")
+    else:
+        scores["Valuation"] = (0, "PE not available or negative")
+
+    total = sum(v[0] for v in scores.values())
+    return min(total, 100), scores
 
 # =========================================================
 # SECTOR MAP
@@ -450,19 +627,32 @@ def compute_rs_ranks(universe_returns_12m):
 # =========================================================
 
 def compute_master_score(base_score, canslim_total, minervini_pct,
-                          momentum_score, rs_rank, market_regime):
+                          momentum_score, rs_rank, market_regime,
+                          quality_score=None):
     """
-    Blended score across all frameworks.
+    Blended score across all frameworks including fundamentals.
     Market regime filter: Bear market downgrades all scores by 20%.
     """
-    raw = (
-        base_score        * 0.20 +   # Technical base (SMA, RSI)
-        canslim_total     * 0.25 +   # CANSLIM
-        minervini_pct     * 0.25 +   # Minervini conditions
-        momentum_score    * 0.20 +   # Momentum factor
-        rs_rank           * 0.10     # RS Rank within universe
-    )
-    # Market regime penalty
+    if quality_score is not None:
+        # With fundamentals: reweight to include quality
+        raw = (
+            base_score        * 0.15 +   # Technical base
+            canslim_total     * 0.20 +   # CANSLIM
+            minervini_pct     * 0.20 +   # Minervini
+            momentum_score    * 0.15 +   # Momentum
+            rs_rank           * 0.10 +   # RS Rank
+            quality_score     * 0.20     # Fundamental quality ← NEW
+        )
+    else:
+        # Without fundamentals: original weights
+        raw = (
+            base_score        * 0.20 +
+            canslim_total     * 0.25 +
+            minervini_pct     * 0.25 +
+            momentum_score    * 0.20 +
+            rs_rank           * 0.10
+        )
+
     if market_regime == "Bear":
         raw = raw * 0.80
 
@@ -812,13 +1002,25 @@ with tab1:
                 else:
                     display_score, display_rec = master, rec
 
+                # Fetch fundamentals (lightweight — from cache after first run)
+                try:
+                    fund = fetch_screener_fundamentals(ticker)
+                    qs, _ = compute_quality_score(fund)
+                    pe_val = f"{fund['PE']:.0f}x" if fund.get('PE') else "-"
+                    roce_val = f"{fund['ROCE']:.0f}%" if fund.get('ROCE') else "-"
+                except Exception:
+                    qs, pe_val, roce_val = None, "-", "-"
+
                 screener_rows.append({
                     "Ticker":        ticker,
                     "Master Score":  master,
+                    "Quality Score": qs if qs else "-",
                     "CANSLIM":       int(canslim_t),
                     "Minervini/8":   min_passed,
                     "Momentum Score":mom_data["MomentumScore"],
                     "RS Rank":       rs_rank,
+                    "PE":            pe_val,
+                    "ROCE":          roce_val,
                     "Rec":           display_rec,
                     "Structure":     metrics["Structure"],
                     "RSI":           metrics["RSI"],
@@ -966,17 +1168,20 @@ with tab3:
         if df.empty or "Close" not in df.columns or len(df) < 252:
             st.error("Not enough data — need at least 252 trading days (1 year). Check the ticker name.")
         else:
-            with st.spinner("Running all frameworks..."):
+            with st.spinner("Running all frameworks + fetching fundamentals..."):
                 metrics          = compute_metrics(df, benchmark_df)
                 canslim_s, canslim_t = compute_canslim_score(df)
                 min_conds, min_passed, min_pct = compute_minervini_score(df)
                 mom_data         = compute_momentum_score(df)
                 risk_metrics     = compute_risk_metrics(df, analysis_capital, analysis_risk)
-                # RS rank vs Nifty 50 universe for context
-                rs_rank_val      = 50  # placeholder (needs full universe)
+                # Fetch fundamentals from Screener.in
+                fundamentals     = fetch_screener_fundamentals(single_ticker)
+                quality_score, quality_breakdown = compute_quality_score(fundamentals)
+                rs_rank_val      = 50  # placeholder
                 master, master_rec = compute_master_score(
                     metrics["Score"], canslim_t, min_pct,
-                    mom_data["MomentumScore"], rs_rank_val, market_regime
+                    mom_data["MomentumScore"], rs_rank_val, market_regime,
+                    quality_score=quality_score
                 )
                 scenarios = compute_probability_scenarios(
                     master, metrics["RSI"], metrics["Momentum3M"], metrics["RelativeStrength"]
@@ -1085,6 +1290,49 @@ with tab3:
 - Position: **₹{risk_metrics['PositionValue']:,.0f}** ({risk_metrics['PositionPct']:.1f}%)
 - Max DD: {risk_metrics['MaxDrawdown']:.1f}% · Current DD: {risk_metrics['CurrentDrawdown']:.1f}%
 """)
+
+            # ── Fundamentals Section ──────────────────────────────────────
+            st.markdown("### 📊 Fundamental Quality")
+            if fundamentals.get("Available"):
+                fc1,fc2,fc3,fc4,fc5,fc6 = st.columns(6)
+                fc1.metric("PE Ratio",       f"{fundamentals['PE']:.1f}x"   if fundamentals['PE']   else "N/A")
+                fc2.metric("ROCE",           f"{fundamentals['ROCE']:.1f}%" if fundamentals['ROCE'] else "N/A")
+                fc3.metric("ROE",            f"{fundamentals['ROE']:.1f}%"  if fundamentals['ROE']  else "N/A")
+                fc4.metric("Sales Growth 3Y",f"{fundamentals['SalesGrowth3Y']:.0f}%"   if fundamentals['SalesGrowth3Y']   else "N/A")
+                fc5.metric("Profit Growth 3Y",f"{fundamentals['ProfitGrowth3Y']:.0f}%" if fundamentals['ProfitGrowth3Y']  else "N/A")
+                fc6.metric("Quality Score",  f"{quality_score}/100" if quality_score else "N/A")
+
+                # Quality breakdown bars
+                if quality_breakdown:
+                    with st.expander("📐 Quality Score Breakdown"):
+                        for factor, (score, label) in quality_breakdown.items():
+                            max_scores = {"ROCE":25,"ROE":20,"ProfitGrowth":20,
+                                          "SalesGrowth":20,"Valuation":15}
+                            max_s = max_scores.get(factor, 20)
+                            pct   = int(score / max_s * 100)
+                            color = "#2ecc71" if pct >= 70 else ("#f39c12" if pct >= 40 else "#e74c3c")
+                            st.markdown(f"**{label}** — {score}/{max_s}")
+                            st.markdown(
+                                f'<div style="background:#2e3250;border-radius:4px;height:8px;">'
+                                f'<div style="background:{color};width:{pct}%;height:8px;border-radius:4px;"></div>'
+                                f'</div>',
+                                unsafe_allow_html=True
+                            )
+
+                # Screener.in Pros & Cons
+                if fundamentals["Pros"] or fundamentals["Cons"]:
+                    p_col, c_col = st.columns(2)
+                    with p_col:
+                        st.markdown("**✅ Screener.in Pros**")
+                        for p in fundamentals["Pros"]:
+                            st.write("•", p)
+                    with c_col:
+                        st.markdown("**⚠️ Screener.in Cons**")
+                        for c in fundamentals["Cons"]:
+                            st.write("•", c)
+                st.caption("Fundamental data sourced from screener.in — updated quarterly")
+            else:
+                st.info("📊 Fundamental data unavailable for this ticker. Screener.in may not have data or was temporarily unreachable.")
 
             # Probability Scenarios
             st.markdown("### 🎯 Probability Scenarios")
